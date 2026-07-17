@@ -5,3 +5,5 @@ beautifulsoup4
 python-dotenv
 TgCrypto
 requests
+yt-dlp
+aiofiles
