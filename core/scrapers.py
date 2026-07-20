@@ -65,8 +65,8 @@ async def search_youtube(query: str) -> Optional[Dict[str, str]]:
         print(f"[Search] YouTube search failed: {e}")
         return None
 
-# Fallback sequence of sites to scrape
-SCRAPING_SITES = ["yt5s", "yt1s", "y2mate", "ytmp3", "9xbuddy", "ytdlp"]
+# Fallback sequence of sites to scrape (ytdlp direct first with multi-client bypass, then fallback web scrapers)
+SCRAPING_SITES = ["ytdlp", "9xbuddy", "ytmp3", "yt5s", "yt1s", "y2mate"]
 
 async def resolve_stream_url(youtube_url: str, mode: str = "video") -> Optional[Dict[str, str]]:
     """
@@ -82,12 +82,12 @@ async def resolve_stream_url(youtube_url: str, mode: str = "video") -> Optional[
     print(f"[Scraper] Resolving {mode} stream for YouTube ID: {video_id}")
 
     extractors = {
+        "ytdlp":   _extract_ytdlp_direct,
+        "9xbuddy": _extract_9xbuddy,
+        "ytmp3":   _extract_ytmp3,
         "yt5s":    _extract_yt5s,
         "yt1s":    _extract_yt1s,
         "y2mate":  _extract_y2mate,
-        "ytmp3":   _extract_ytmp3,
-        "9xbuddy": _extract_9xbuddy,
-        "ytdlp":   _extract_ytdlp_direct,
     }
 
     for site in SCRAPING_SITES:
@@ -358,25 +358,26 @@ async def _extract_9xbuddy(video_url: str, mode: str) -> Optional[Dict[str, str]
     return None
 
 
-# ─── Scraper 6: Programmatic yt-dlp iOS Extractor (Ultimate Fallback) ───────
+# ─── Scraper 6: Programmatic yt-dlp Extractor (Multi-Client Bypass) ────────
 async def _extract_ytdlp_direct(video_url: str, mode: str) -> Optional[Dict[str, str]]:
-    """Programmatic yt-dlp extractor utilizing the iOS client to bypass all cookie barriers."""
+    """Programmatic yt-dlp extractor utilizing android/ios/mweb client fallbacks to bypass bot blocks."""
     import yt_dlp
     
-    format_spec = "best[height<=720]" if mode == "video" else "bestaudio"
-    ydl_opts = {
-        'format': format_spec,
-        'quiet': True,
-        'no_warnings': True,
-        'nocheckcertificate': True,
-        'extractor_args': {
-            'youtube': {
-                'client': ['ios'] # Strictly use iOS client parameter to skip cookies
+    format_spec = "best[height<=720]" if mode == "video" else "bestaudio/best"
+    clients = ["android", "ios", "mweb", "web_embedded"]
+
+    def extract_with_client(client_name: str):
+        ydl_opts = {
+            'format': format_spec,
+            'quiet': True,
+            'no_warnings': True,
+            'nocheckcertificate': True,
+            'extractor_args': {
+                'youtube': {
+                    'player_client': [client_name]
+                }
             }
         }
-    }
-    
-    def extract():
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(video_url, download=False)
             if not info:
@@ -395,11 +396,15 @@ async def _extract_ytdlp_direct(video_url: str, mode: str) -> Optional[Dict[str,
                     "thumbnail": thumbnail,
                 }
             return None
-            
-    loop = asyncio.get_event_loop()
-    try:
-        res = await loop.run_in_executor(None, extract)
-        return res
-    except Exception as e:
-        print(f"[Scraper/ytdlp-ios] Extraction failed: {e}")
-        return None
+
+    loop = asyncio.get_running_loop()
+    for client_name in clients:
+        try:
+            res = await loop.run_in_executor(None, extract_with_client, client_name)
+            if res and res.get("url"):
+                return res
+        except Exception as e:
+            print(f"[Scraper/ytdlp-{client_name}] Extraction failed: {e}")
+            continue
+
+    return None

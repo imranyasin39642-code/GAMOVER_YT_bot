@@ -69,8 +69,10 @@ async def download_file(url: str, dest_path: str, progress_callback=None) -> boo
 
 
 async def download_song_ytdlp(youtube_url: str, dest_path: str, mode: str, progress_callback=None) -> bool:
-    """Asynchronously download and merge video + audio tracks natively using yt-dlp iOS client."""
+    """Asynchronously download and merge video + audio tracks natively using yt-dlp with multi-client bot bypass."""
     import yt_dlp
+    import glob
+    import shutil
     
     loop = asyncio.get_running_loop()
     last_update = [time.time()]
@@ -84,62 +86,75 @@ async def download_song_ytdlp(youtube_url: str, dest_path: str, mode: str, progr
             now = time.time()
             if now - last_update[0] >= 3.0:
                 if progress_callback:
-                    # Map parameters to expected: pct, downloaded, total, start_time
                     asyncio.run_coroutine_threadsafe(
                         progress_callback(pct, downloaded, total, last_update[0]),
                         loop
                     )
                 last_update[0] = now
 
-    outtmpl = dest_path.rsplit('.', 1)[0] + '.%(ext)s'
+    base_path = dest_path.rsplit('.', 1)[0]
+    outtmpl = base_path + '.%(ext)s'
     
     if mode == "video":
         format_spec = "bestvideo[height<=720][fps<=60]+bestaudio/best[height<=720]/best"
     else:
         format_spec = "bestaudio/best"
-        
-    ydl_opts = {
-        'format': format_spec,
-        'outtmpl': outtmpl,
-        'quiet': True,
-        'no_warnings': True,
-        'nocheckcertificate': True,
-        'progress_hooks': [hook],
-        'merge_output_format': 'mp4',
-        'extractor_args': {
-            'youtube': {
-                'client': ['ios']
+
+    clients_to_try = ["android", "ios", "mweb", "web_embedded"]
+
+    # 1. Clean up any leftover temp files or target files from previous attempts
+    for f in glob.glob(base_path + "*"):
+        try:
+            os.remove(f)
+        except Exception:
+            pass
+
+    for client_name in clients_to_try:
+        ydl_opts = {
+            'format': format_spec,
+            'outtmpl': outtmpl,
+            'quiet': True,
+            'no_warnings': True,
+            'nocheckcertificate': True,
+            'progress_hooks': [hook],
+            'merge_output_format': 'mp4',
+            'extractor_args': {
+                'youtube': {
+                    'player_client': [client_name]
+                }
             }
         }
-    }
-    
-    try:
-        if os.path.exists(dest_path):
-            os.remove(dest_path)
-    except:
-        pass
         
-    def run():
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            ydl.download([youtube_url])
+        def run():
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                ydl.download([youtube_url])
+
+        try:
+            await loop.run_in_executor(None, run)
             
-    try:
-        await loop.run_in_executor(None, run)
-        
-        # Check and rename output extension formats if merged to something else
-        base_path = dest_path.rsplit('.', 1)[0]
-        for ext in ['.mp4', '.mkv', '.webm']:
-            p = base_path + ext
-            if os.path.exists(p):
-                if p != dest_path:
-                    if os.path.exists(dest_path):
-                        os.remove(dest_path)
-                    os.rename(p, dest_path)
-                return True
-        return False
-    except Exception as e:
-        print(f"[Player/ytdlp-downloader] Download failed: {e}")
-        return False
+            # Check and rename output extension formats if merged to something else
+            for ext in ['.mp4', '.mkv', '.webm']:
+                p = base_path + ext
+                if os.path.exists(p):
+                    if p != dest_path:
+                        if os.path.exists(dest_path):
+                            try:
+                                os.remove(dest_path)
+                            except Exception:
+                                pass
+                        shutil.move(p, dest_path)
+                    return True
+        except Exception as e:
+            print(f"[Player/ytdlp-downloader] Client '{client_name}' failed: {e}")
+            # Clean up temp files before trying next client
+            for f in glob.glob(base_path + "*.temp.*") + glob.glob(base_path + "*.part"):
+                try:
+                    os.remove(f)
+                except Exception:
+                    pass
+            continue
+
+    return False
 
 
 class SeekableMediaStream(MediaStream):
