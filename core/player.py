@@ -206,6 +206,7 @@ class PlayerManager:
         self.stream_thumbnail: dict[int, str] = {}     # chat_id -> thumbnail URL
         self.now_playing_msg_id: dict[int, int] = {}   # chat_id -> Telegram message_id of now-playing card
         self.progress_tasks: dict[int, asyncio.Task] = {}  # chat_id -> progress updater task
+        self.download_tasks: dict[str, asyncio.Task] = {}  # video_id_mode -> download task
 
     # ── Progress bar helpers ─────────────────────────────────────────────────
 
@@ -379,13 +380,26 @@ class PlayerManager:
         if local_path and os.path.exists(local_path):
             return
             
-        filename = f"{video_id}_{mode}.mp4"
-        dest_path = os.path.join(Config.DOWNLOADS_DIR, filename)
+        task_key = f"{video_id}_{mode}"
+        self.download_tasks[task_key] = asyncio.current_task()
         
-        # Download silently in the background
-        ok = await download_song_ytdlp(youtube_url, dest_path, mode, progress_callback=None)
-        if ok and os.path.exists(dest_path):
-            save_to_cache(video_id, mode, dest_path, title)
+        try:
+            filename = f"{video_id}_{mode}.mp4"
+            dest_path = os.path.join(Config.DOWNLOADS_DIR, filename)
+            
+            # Resolve metadata for DB cache
+            res = await resolve_stream_url(youtube_url, mode)
+            thumb = res.get("thumbnail") if res else f"https://img.youtube.com/vi/{video_id}/hqdefault.jpg"
+            dur = int(res.get("duration", 0)) if res else 0
+            
+            # Download silently in the background
+            ok = await download_song_ytdlp(youtube_url, dest_path, mode, progress_callback=None)
+            if ok and os.path.exists(dest_path):
+                save_to_cache(video_id, mode, dest_path, title, thumbnail=thumb, duration=dur)
+        except Exception as e:
+            print(f"[Player/pre-download] Error pre-downloading {video_id}: {e}")
+        finally:
+            self.download_tasks.pop(task_key, None)
 
     async def play(self, chat_id: int, youtube_url: str, mode: str = "video", status_msg = None, requested_by: str = None, requested_by_id: int = 0) -> bool:
         # ── Auto-search if user gave a text query instead of a URL ──────────
@@ -453,10 +467,32 @@ class PlayerManager:
         if cached:
             local_path = cached["file_path"]
             title = cached["title"]
+            self.stream_thumbnail[chat_id] = cached.get("thumbnail") or f"https://img.youtube.com/vi/{video_id}/hqdefault.jpg"
+            self.stream_duration[chat_id] = int(cached.get("duration") or 0)
+
+        # Check if background pre-download is currently running for this track
+        task_key = f"{video_id}_{mode}"
+        if not local_path and task_key in self.download_tasks:
+            if status_msg:
+                await status_msg.edit_text(f"{ROYAL_HEADER}⏳ <b>Finishing background download...</b>")
+            try:
+                task = self.download_tasks[task_key]
+                if task and not task.done():
+                    await asyncio.shield(task)
+            except Exception as e:
+                print(f"[Player] Waiting for pre-download failed: {e}")
+
+            # Re-check cache after waiting
+            cached = get_cached_item(video_id, mode)
+            if cached:
+                local_path = cached["file_path"]
+                title = cached["title"]
+                self.stream_thumbnail[chat_id] = cached.get("thumbnail") or f"https://img.youtube.com/vi/{video_id}/hqdefault.jpg"
+                self.stream_duration[chat_id] = int(cached.get("duration") or 0)
 
         if not local_path:
             # 2. Resolve link via Web Scraper chain to fetch Title first
-            await status_msg.edit_text(f"{ROYAL_HEADER}🔍 <b>Searching database & resolving stream...</b>")
+            await status_msg.edit_text(f"{ROYAL_HEADER}🔍 <b>Searching database &amp; resolving stream...</b>")
             res = await resolve_stream_url(youtube_url, mode)
             if res:
                 title = res["title"]
@@ -525,8 +561,12 @@ class PlayerManager:
                 return False
 
             local_path = dest_path
-            # Save file path to SQLite DB Cache
-            save_to_cache(video_id, mode, local_path, title)
+            # Save file path, title, thumbnail, duration to SQLite DB Cache
+            save_to_cache(
+                video_id, mode, local_path, title,
+                thumbnail=self.stream_thumbnail.get(chat_id, f"https://img.youtube.com/vi/{video_id}/hqdefault.jpg"),
+                duration=self.stream_duration.get(chat_id, 0)
+            )
 
         else:
             print(f"[Player] Direct cache hit for ID {video_id}! Playing instantly.")

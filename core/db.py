@@ -20,10 +20,19 @@ def init_db():
             mode TEXT,
             file_path TEXT,
             title TEXT,
+            thumbnail TEXT,
+            duration INTEGER,
             timestamp REAL,
             PRIMARY KEY (video_id, mode)
         )
     """)
+    
+    # Migration helper for existing DBs missing new columns
+    for col_name, col_type in [("thumbnail", "TEXT"), ("duration", "INTEGER")]:
+        try:
+            cursor.execute(f"ALTER TABLE downloaded_cache ADD COLUMN {col_name} {col_type}")
+        except Exception:
+            pass
     
     # Table for Sudo users
     cursor.execute("""
@@ -81,14 +90,14 @@ def init_db():
     conn.close()
     print("[DB] Database initialized successfully!")
 
-def save_to_cache(video_id: str, mode: str, file_path: str, title: str):
+def save_to_cache(video_id: str, mode: str, file_path: str, title: str, thumbnail: str = "", duration: int = 0):
     conn = get_db()
     cursor = conn.cursor()
     try:
         cursor.execute(
-            "INSERT OR REPLACE INTO downloaded_cache (video_id, mode, file_path, title, timestamp) "
-            "VALUES (?, ?, ?, ?, ?)",
-            (video_id, mode, file_path, title, time.time())
+            "INSERT OR REPLACE INTO downloaded_cache (video_id, mode, file_path, title, thumbnail, duration, timestamp) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (video_id, mode, file_path, title, thumbnail, duration, time.time())
         )
         conn.commit()
         print(f"[DB] Saved {video_id} ({mode}) to cache DB.")
@@ -127,12 +136,20 @@ def get_cached_item(video_id: str, mode: str) -> dict:
     cursor = conn.cursor()
     try:
         cursor.execute(
-            "SELECT file_path, title FROM downloaded_cache WHERE video_id = ? AND mode = ?",
+            "SELECT file_path, title, thumbnail, duration FROM downloaded_cache WHERE video_id = ? AND mode = ?",
             (video_id, mode)
         )
         row = cursor.fetchone()
         if row and os.path.exists(row["file_path"]):
-            return {"file_path": row["file_path"], "title": row["title"]}
+            keys = row.keys()
+            thumb = row["thumbnail"] if "thumbnail" in keys else None
+            dur = row["duration"] if "duration" in keys else 0
+            return {
+                "file_path": row["file_path"],
+                "title": row["title"],
+                "thumbnail": thumb,
+                "duration": dur
+            }
         # Delete invalid entry if file does not exist on disk
         if row:
             cursor.execute(
