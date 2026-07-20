@@ -164,7 +164,7 @@ def register(app: Client):
                 return True
             return False  # async admin check done inline below
 
-        if action in ("play_stop", "play_skip"):
+        if action in ("play_stop", "play_skip", "play_pause", "play_resume"):
             chat_id = int(data[1])
             requested_by_id = int(data[2]) if len(data) > 2 else 0
             user_id = query.from_user.id if query.from_user else 0
@@ -189,7 +189,7 @@ def register(app: Client):
                 except Exception:
                     pass
                 await query.answer("⏹ Stopped!")
-            else:  # play_skip
+            elif action == "play_skip":
                 await query.answer("⏭ Skipping...")
                 skipped = await player_manager.skip(chat_id)
                 if not skipped:
@@ -197,6 +197,18 @@ def register(app: Client):
                         await query.message.delete()
                     except Exception:
                         pass
+            elif action == "play_pause":
+                ok = await player_manager.pause(chat_id)
+                if ok:
+                    await query.answer("⏸ Paused!")
+                else:
+                    await query.answer("❌ Stream not active or cannot pause!", show_alert=True)
+            elif action == "play_resume":
+                ok = await player_manager.resume(chat_id)
+                if ok:
+                    await query.answer("▶ Resumed!")
+                else:
+                    await query.answer("❌ Stream not active or cannot resume!", show_alert=True)
 
         elif action == "play_close":
             try:

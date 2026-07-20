@@ -271,11 +271,13 @@ class PlayerManager:
                     if msg_id:
                         buttons = InlineKeyboardMarkup([
                             [
-                                InlineKeyboardButton("⏭ SKIP", callback_data=f"play_skip|{chat_id}|{requested_by_id}", style="primary"),
-                                InlineKeyboardButton("⏹ STOP", callback_data=f"play_stop|{chat_id}|{requested_by_id}", style="danger"),
+                                InlineKeyboardButton("▷", callback_data=f"play_resume|{chat_id}|{requested_by_id}"),
+                                InlineKeyboardButton("II", callback_data=f"play_pause|{chat_id}|{requested_by_id}"),
+                                InlineKeyboardButton("⏭", callback_data=f"play_skip|{chat_id}|{requested_by_id}"),
+                                InlineKeyboardButton("▢", callback_data=f"play_stop|{chat_id}|{requested_by_id}"),
                             ],
                             [
-                                InlineKeyboardButton("🗑 Close", callback_data="play_close", style="danger")
+                                InlineKeyboardButton("🗑 Close", callback_data="play_close")
                             ]
                         ])
                         await edit_styled(
@@ -638,11 +640,13 @@ class PlayerManager:
 
             buttons = InlineKeyboardMarkup([
                 [
-                    InlineKeyboardButton("⏭ SKIP", callback_data=f"play_skip|{chat_id}|{requested_by_id}", style="primary"),
-                    InlineKeyboardButton("⏹ STOP", callback_data=f"play_stop|{chat_id}|{requested_by_id}", style="danger"),
+                    InlineKeyboardButton("▷", callback_data=f"play_resume|{chat_id}|{requested_by_id}"),
+                    InlineKeyboardButton("II", callback_data=f"play_pause|{chat_id}|{requested_by_id}"),
+                    InlineKeyboardButton("⏭", callback_data=f"play_skip|{chat_id}|{requested_by_id}"),
+                    InlineKeyboardButton("▢", callback_data=f"play_stop|{chat_id}|{requested_by_id}"),
                 ],
                 [
-                    InlineKeyboardButton("🗑 Close", callback_data="play_close", style="danger")
+                    InlineKeyboardButton("🗑 Close", callback_data="play_close")
                 ]
             ])
 
@@ -744,6 +748,24 @@ class PlayerManager:
         else:
             # Queue is empty — fully stop
             await self.stop(chat_id)
+            return False
+
+    async def pause(self, chat_id: int) -> bool:
+        """Pause active stream."""
+        try:
+            await self._pytg.pause_stream(chat_id)
+            return True
+        except Exception as e:
+            print(f"[Player] Pause error in {chat_id}: {e}")
+            return False
+
+    async def resume(self, chat_id: int) -> bool:
+        """Resume paused stream."""
+        try:
+            await self._pytg.resume_stream(chat_id)
+            return True
+        except Exception as e:
+            print(f"[Player] Resume error in {chat_id}: {e}")
             return False
 
     async def stop(self, chat_id: int):
