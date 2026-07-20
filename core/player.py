@@ -19,7 +19,7 @@ ROYAL_HEADER = "👑 <b>ɢᴀᴍᴇᴏᴠᴇʀ ʏᴛ sᴛʀᴇᴀᴍᴇʀ</b> �
 os.makedirs(Config.DOWNLOADS_DIR, exist_ok=True)
 
 async def download_file(url: str, dest_path: str, progress_callback=None) -> bool:
-    """Asynchronously downloads a direct URL to a file with progress updates."""
+    """Asynchronously downloads a direct URL to a file with progress updates (supports Proxy + Direct failover)."""
     if os.path.exists(dest_path):
         try:
             os.remove(dest_path)
@@ -28,11 +28,17 @@ async def download_file(url: str, dest_path: str, progress_callback=None) -> boo
 
     max_retries = 3
     timeout = aiohttp.ClientTimeout(total=None, connect=20, sock_read=40)
-    
+    proxy_url = getattr(Config, "PROXY_URL", "").strip() or None
+
     for attempt in range(1, max_retries + 1):
+        # Determine whether to use proxy for this attempt
+        current_proxy = proxy_url if attempt == 1 else None
+        if attempt > 1 and proxy_url:
+            print(f"[Downloader] Retry {attempt}: Switching to DIRECT connection (skipping proxy)...")
+
         try:
             async with aiohttp.ClientSession(timeout=timeout) as session:
-                async with session.get(url, allow_redirects=True) as response:
+                async with session.get(url, proxy=current_proxy, allow_redirects=True) as response:
                     if response.status != 200:
                         raise Exception(f"HTTP Status {response.status}")
 
@@ -57,25 +63,26 @@ async def download_file(url: str, dest_path: str, progress_callback=None) -> boo
                         raise Exception("Downloaded file is too small.")
                     return True
         except Exception as e:
-            print(f"[Downloader] Attempt {attempt} failed: {e}")
+            print(f"[Downloader] Attempt {attempt} failed (Proxy: {bool(current_proxy)}): {e}")
             if os.path.exists(dest_path):
                 try:
                     os.remove(dest_path)
                 except Exception:
                     pass
-            await asyncio.sleep(2)
+            await asyncio.sleep(1.5)
             
     return False
 
 
 async def download_song_ytdlp(youtube_url: str, dest_path: str, mode: str, progress_callback=None) -> bool:
-    """Asynchronously download and merge video + audio tracks natively using yt-dlp with multi-client bot bypass."""
+    """Asynchronously download and merge video + audio tracks natively using yt-dlp with Proxy & Direct failover."""
     import yt_dlp
     import glob
     import shutil
     
     loop = asyncio.get_running_loop()
     last_update = [time.time()]
+    proxy_url = getattr(Config, "PROXY_URL", "").strip()
     
     def hook(d):
         if d['status'] == 'downloading':
@@ -100,8 +107,6 @@ async def download_song_ytdlp(youtube_url: str, dest_path: str, mode: str, progr
     else:
         format_spec = "bestaudio/best"
 
-    clients_to_try = ["android", "ios", "mweb", "web_embedded"]
-
     # 1. Clean up any leftover temp files or target files from previous attempts
     for f in glob.glob(base_path + "*"):
         try:
@@ -109,30 +114,36 @@ async def download_song_ytdlp(youtube_url: str, dest_path: str, mode: str, progr
         except Exception:
             pass
 
-    for client_name in clients_to_try:
+    def run(use_proxy: bool):
         ydl_opts = {
             'format': format_spec,
             'outtmpl': outtmpl,
             'quiet': True,
             'no_warnings': True,
             'nocheckcertificate': True,
+            'geo_bypass': True,
+            'http_headers': {
+                'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1',
+                'Accept': '*/*',
+                'Accept-Language': 'en-US,en;q=0.9',
+            },
             'progress_hooks': [hook],
             'merge_output_format': 'mp4',
             'extractor_args': {
                 'youtube': {
-                    'player_client': [client_name]
+                    'player_client': ['ios', 'mweb', 'android', 'web_embedded']
                 }
             }
         }
-        
-        def run():
-            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                ydl.download([youtube_url])
+        if use_proxy and proxy_url:
+            ydl_opts['proxy'] = proxy_url
 
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            ydl.download([youtube_url])
+
+    async def try_download(use_proxy: bool) -> bool:
         try:
-            await loop.run_in_executor(None, run)
-            
-            # Check and rename output extension formats if merged to something else
+            await loop.run_in_executor(None, run, use_proxy)
             for ext in ['.mp4', '.mkv', '.webm']:
                 p = base_path + ext
                 if os.path.exists(p):
@@ -144,17 +155,27 @@ async def download_song_ytdlp(youtube_url: str, dest_path: str, mode: str, progr
                                 pass
                         shutil.move(p, dest_path)
                     return True
+            return False
         except Exception as e:
-            print(f"[Player/ytdlp-downloader] Client '{client_name}' failed: {e}")
-            # Clean up temp files before trying next client
+            mode_str = "PROXY" if use_proxy else "DIRECT"
+            print(f"[Player/ytdlp-downloader] {mode_str} download failed: {e}")
             for f in glob.glob(base_path + "*.temp.*") + glob.glob(base_path + "*.part"):
                 try:
                     os.remove(f)
                 except Exception:
                     pass
-            continue
+            return False
 
-    return False
+    # Attempt 1: Try with Proxy if configured
+    if proxy_url:
+        print(f"[Player/ytdlp-downloader] Initiating download via PROXY...")
+        if await try_download(use_proxy=True):
+            return True
+        print(f"[Player/ytdlp-downloader] Proxy download failed. Retrying with DIRECT connection...")
+
+    # Attempt 2: Direct connection (or primary if no proxy set)
+    print(f"[Player/ytdlp-downloader] Initiating download via DIRECT connection...")
+    return await try_download(use_proxy=False)
 
 
 class SeekableMediaStream(MediaStream):
@@ -273,7 +294,8 @@ class PlayerManager:
                             [
                                 InlineKeyboardButton("▷", callback_data=f"play_resume|{chat_id}|{requested_by_id}"),
                                 InlineKeyboardButton("II", callback_data=f"play_pause|{chat_id}|{requested_by_id}"),
-                                InlineKeyboardButton("⏭", callback_data=f"play_skip|{chat_id}|{requested_by_id}"),
+                                InlineKeyboardButton("➕", callback_data=f"play_skip|{chat_id}|{requested_by_id}"),
+                                InlineKeyboardButton("⤨I", callback_data=f"play_skip|{chat_id}|{requested_by_id}"),
                                 InlineKeyboardButton("▢", callback_data=f"play_stop|{chat_id}|{requested_by_id}"),
                             ],
                             [
@@ -642,7 +664,8 @@ class PlayerManager:
                 [
                     InlineKeyboardButton("▷", callback_data=f"play_resume|{chat_id}|{requested_by_id}"),
                     InlineKeyboardButton("II", callback_data=f"play_pause|{chat_id}|{requested_by_id}"),
-                    InlineKeyboardButton("⏭", callback_data=f"play_skip|{chat_id}|{requested_by_id}"),
+                    InlineKeyboardButton("➕", callback_data=f"play_skip|{chat_id}|{requested_by_id}"),
+                    InlineKeyboardButton("⤨I", callback_data=f"play_skip|{chat_id}|{requested_by_id}"),
                     InlineKeyboardButton("▢", callback_data=f"play_stop|{chat_id}|{requested_by_id}"),
                 ],
                 [

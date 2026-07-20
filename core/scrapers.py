@@ -5,6 +5,7 @@ import urllib.parse
 from typing import Optional, Dict
 import aiohttp
 from core.dns_helper import get_doh_connector
+from config import Config
 
 def extract_video_id(url: str) -> Optional[str]:
     """Extract standard 11-char YouTube Video ID from any short or full link."""
@@ -360,24 +361,33 @@ async def _extract_9xbuddy(video_url: str, mode: str) -> Optional[Dict[str, str]
 
 # ─── Scraper 6: Programmatic yt-dlp Extractor (Multi-Client Bypass) ────────
 async def _extract_ytdlp_direct(video_url: str, mode: str) -> Optional[Dict[str, str]]:
-    """Programmatic yt-dlp extractor utilizing android/ios/mweb client fallbacks to bypass bot blocks."""
+    """Programmatic yt-dlp extractor utilizing ios/mweb/android client fallbacks with Proxy & Direct failover."""
     import yt_dlp
     
     format_spec = "best[height<=720]" if mode == "video" else "bestaudio/best"
-    clients = ["android", "ios", "mweb", "web_embedded"]
+    proxy_url = getattr(Config, "PROXY_URL", "").strip()
 
-    def extract_with_client(client_name: str):
+    def extract(use_proxy: bool):
         ydl_opts = {
             'format': format_spec,
             'quiet': True,
             'no_warnings': True,
             'nocheckcertificate': True,
+            'geo_bypass': True,
+            'http_headers': {
+                'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1',
+                'Accept': '*/*',
+                'Accept-Language': 'en-US,en;q=0.9',
+            },
             'extractor_args': {
                 'youtube': {
-                    'player_client': [client_name]
+                    'player_client': ['ios', 'mweb', 'android', 'web_embedded']
                 }
             }
         }
+        if use_proxy and proxy_url:
+            ydl_opts['proxy'] = proxy_url
+
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(video_url, download=False)
             if not info:
@@ -398,13 +408,17 @@ async def _extract_ytdlp_direct(video_url: str, mode: str) -> Optional[Dict[str,
             return None
 
     loop = asyncio.get_running_loop()
-    for client_name in clients:
+    if proxy_url:
         try:
-            res = await loop.run_in_executor(None, extract_with_client, client_name)
-            if res and res.get("url"):
+            res = await loop.run_in_executor(None, extract, True)
+            if res:
                 return res
         except Exception as e:
-            print(f"[Scraper/ytdlp-{client_name}] Extraction failed: {e}")
-            continue
+            print(f"[Scraper/ytdlp] Proxy extraction failed ({e}). Retrying with DIRECT connection...")
 
-    return None
+    try:
+        res = await loop.run_in_executor(None, extract, False)
+        return res
+    except Exception as e:
+        print(f"[Scraper/ytdlp] Direct extraction failed: {e}")
+        return None
