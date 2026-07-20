@@ -374,6 +374,7 @@ async def _extract_ytdlp_direct(video_url: str, mode: str) -> Optional[Dict[str,
             'no_warnings': True,
             'nocheckcertificate': True,
             'geo_bypass': True,
+            'socket_timeout': 8,
             'http_headers': {
                 'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1',
                 'Accept': '*/*',
@@ -409,16 +410,21 @@ async def _extract_ytdlp_direct(video_url: str, mode: str) -> Optional[Dict[str,
 
     loop = asyncio.get_running_loop()
     if proxy_url:
+        print(f"[Scraper/ytdlp] Attempting extraction via PROXY: {proxy_url[:30]}...")
         try:
             res = await loop.run_in_executor(None, extract, True)
             if res:
+                print(f"[Scraper/ytdlp] PROXY extraction SUCCESSFUL!")
                 return res
         except Exception as e:
-            print(f"[Scraper/ytdlp] Proxy extraction failed ({e}). Retrying with DIRECT connection...")
+            print(f"[Scraper/ytdlp] PROXY connection failed ({e}). Trying DIRECT fallback...")
 
+    print(f"[Scraper/ytdlp] Attempting extraction via DIRECT connection...")
     try:
         res = await loop.run_in_executor(None, extract, False)
+        if res:
+            print(f"[Scraper/ytdlp] DIRECT extraction SUCCESSFUL!")
         return res
     except Exception as e:
-        print(f"[Scraper/ytdlp] Direct extraction failed: {e}")
+        print(f"[Scraper/ytdlp] DIRECT extraction failed: {e}")
         return None
