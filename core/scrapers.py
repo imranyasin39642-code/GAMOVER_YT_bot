@@ -359,36 +359,20 @@ async def _extract_9xbuddy(video_url: str, mode: str) -> Optional[Dict[str, str]
     return None
 
 
-# ─── Scraper 6: Programmatic yt-dlp Extractor (Multi-Client Bypass) ────────
+# ─── Scraper 6: Programmatic yt-dlp Extractor ──────────────────────────────
 async def _extract_ytdlp_direct(video_url: str, mode: str) -> Optional[Dict[str, str]]:
-    """Programmatic yt-dlp extractor utilizing ios/mweb/android client fallbacks with Proxy & Direct failover."""
+    """Programmatic yt-dlp extractor to resolve stream direct URLs."""
     import yt_dlp
     
     format_spec = "best[height<=720]" if mode == "video" else "bestaudio/best"
-    proxy_url = getattr(Config, "PROXY_URL", "").strip()
 
-    def extract(use_proxy: bool):
+    def extract():
         ydl_opts = {
             'format': format_spec,
             'quiet': True,
             'no_warnings': True,
             'nocheckcertificate': True,
-            'geo_bypass': True,
-            'socket_timeout': 8,
-            'http_headers': {
-                'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1',
-                'Accept': '*/*',
-                'Accept-Language': 'en-US,en;q=0.9',
-            },
-            'extractor_args': {
-                'youtube': {
-                    'player_client': ['ios', 'mweb', 'android', 'web_embedded']
-                }
-            }
         }
-        if use_proxy and proxy_url:
-            ydl_opts['proxy'] = proxy_url
-
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(video_url, download=False)
             if not info:
@@ -409,22 +393,9 @@ async def _extract_ytdlp_direct(video_url: str, mode: str) -> Optional[Dict[str,
             return None
 
     loop = asyncio.get_running_loop()
-    if proxy_url:
-        print(f"[Scraper/ytdlp] Attempting extraction via PROXY: {proxy_url[:30]}...")
-        try:
-            res = await loop.run_in_executor(None, extract, True)
-            if res:
-                print(f"[Scraper/ytdlp] PROXY extraction SUCCESSFUL!")
-                return res
-        except Exception as e:
-            print(f"[Scraper/ytdlp] PROXY connection failed ({e}). Trying DIRECT fallback...")
-
-    print(f"[Scraper/ytdlp] Attempting extraction via DIRECT connection...")
     try:
-        res = await loop.run_in_executor(None, extract, False)
-        if res:
-            print(f"[Scraper/ytdlp] DIRECT extraction SUCCESSFUL!")
+        res = await loop.run_in_executor(None, extract)
         return res
     except Exception as e:
-        print(f"[Scraper/ytdlp] DIRECT extraction failed: {e}")
+        print(f"[Scraper/ytdlp] Extraction failed: {e}")
         return None

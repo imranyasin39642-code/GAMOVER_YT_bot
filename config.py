@@ -9,7 +9,6 @@ class Config:
     BOT_TOKEN: str = os.getenv("BOT_TOKEN", "")
     STRING_SESSION: str = os.getenv("STRING_SESSION", "")
     OWNER_ID: int = int(os.getenv("OWNER_ID", 0))
-    PROXY_URL: str = os.getenv("PROXY_URL", "").strip()
 
     DOWNLOADS_DIR: str = os.getenv("DOWNLOADS_DIR", "downloads")
     PROJECT_ROOT: str = os.path.dirname(os.path.abspath(__file__))
