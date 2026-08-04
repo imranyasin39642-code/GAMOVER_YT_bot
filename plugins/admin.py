@@ -261,23 +261,26 @@ def get_admin_panel_markup() -> InlineKeyboardMarkup:
             InlineKeyboardButton("⚡ QUALITY & FPS", callback_data="admin_quality_menu", style="success")
         ],
         [
-            InlineKeyboardButton("📢 BROADCAST", callback_data="admin_bc_prompt", style="success"),
-            InlineKeyboardButton("👥 BC GROUPS", callback_data="admin_groups|0", style="primary")
+            InlineKeyboardButton("📡 LOCAL PC API", callback_data="admin_api_menu", style="success"),
+            InlineKeyboardButton("📢 BROADCAST", callback_data="admin_bc_prompt", style="success")
         ],
         [
-            InlineKeyboardButton("👋 WELCOME SETTINGS", callback_data="admin_welcome_groups|0", style="primary"),
-            InlineKeyboardButton("🤖 BOT STATUS", callback_data="admin_status_groups|0", style="primary")
+            InlineKeyboardButton("👥 BC GROUPS", callback_data="admin_groups|0", style="primary"),
+            InlineKeyboardButton("👋 WELCOME SETTINGS", callback_data="admin_welcome_groups|0", style="primary")
         ],
         [
-            InlineKeyboardButton("📂 FILE MANAGER", callback_data="admin_file_manager|0", style="primary"),
-            InlineKeyboardButton("🌐 NETWORK MANAGER", callback_data="admin_network", style="primary")
+            InlineKeyboardButton("🤖 BOT STATUS", callback_data="admin_status_groups|0", style="primary"),
+            InlineKeyboardButton("📂 FILE MANAGER", callback_data="admin_file_manager|0", style="primary")
         ],
         [
-            InlineKeyboardButton("📹 MANAGE VIDEOS", callback_data="admin_manage_videos", style="primary"),
-            InlineKeyboardButton("👥 APPROVED USERS", callback_data="admin_approved_groups|0", style="success")
+            InlineKeyboardButton("🌐 NETWORK MANAGER", callback_data="admin_network", style="primary"),
+            InlineKeyboardButton("📹 MANAGE VIDEOS", callback_data="admin_manage_videos", style="primary")
         ],
         [
-            InlineKeyboardButton("🔄 RELOAD BOT", callback_data="admin_reload_bot", style="danger"),
+            InlineKeyboardButton("👥 APPROVED USERS", callback_data="admin_approved_groups|0", style="success"),
+            InlineKeyboardButton("🔄 RELOAD BOT", callback_data="admin_reload_bot", style="danger")
+        ],
+        [
             InlineKeyboardButton("❌ CLOSE", callback_data="admin_close", style="danger")
         ]
     ])
@@ -575,6 +578,31 @@ def register(app: Client):
                 f"Select an operation below:"
             )
             markup = get_admin_panel_markup()
+            try:
+                await query.message.edit_text(text, reply_markup=markup)
+            except Exception:
+                pass
+
+        elif data == "admin_api_menu":
+            await query.answer("Opening Local PC API Manager...")
+            from core.db import get_setting
+            curr_url = get_setting("local_api_url") or Config.LOCAL_API_URL or "Not Set"
+            text = make_card(
+                f"{ROYAL_HEADER}"
+                f"📡 <b>LOCAL PC API MANAGER</b> 📡\n\n"
+                f"• <b>Current Live URL:</b>\n<code>{curr_url}</code>\n\n"
+                f"• <b>Architecture:</b> <code>Hybrid Local Extraction Engine</code>\n"
+                f"• <b>Local PC Bandwidth Load:</b> <code>0% (Metadata JSON Only)</code>\n"
+                f"• <b>Port:</b> <code>8000 (FastAPI + Cloudflare Tunnel)</code>\n\n"
+                f"💡 <b>To update URL via command, send:</b>\n"
+                f"<code>/setapi https://your-new-tunnel.trycloudflare.com</code>"
+            )
+            markup = InlineKeyboardMarkup([
+                [
+                    InlineKeyboardButton("🔙 BACK TO DASHBOARD", callback_data="admin_back", style="primary"),
+                    InlineKeyboardButton("❌ CLOSE", callback_data="admin_close", style="danger")
+                ]
+            ])
             try:
                 await query.message.edit_text(text, reply_markup=markup)
             except Exception:
