@@ -125,80 +125,100 @@ async def resolve_stream_url(youtube_url: str, mode: str = "video") -> Optional[
 
 # ─── Scraper 0: GAMEOVER FastAPI Extractor (Primary High-Speed Scraper) ────
 async def _extract_gameover_api(video_url: str, mode: str) -> Optional[Dict[str, str]]:
-    """Primary high-speed scraper calling live GAMEOVER API (https://nskmedia.net)."""
+    """Primary high-speed scraper calling live GAMEOVER API (https://nskmedia.net / local API)."""
     video_id = extract_video_id(video_url)
     if not video_id:
         return None
 
     import os
-    api_base = os.getenv("API_BASE_URL", "https://nskmedia.net").rstrip("/")
+    env_api_base = os.getenv("API_BASE_URL", "").rstrip("/")
     api_key  = os.getenv("GAMEOVER_API_KEY", "GAMEOVER_SECRET_123")
-    url = f"{api_base}/api/extract?video_id={video_id}&api_key={api_key}"
+    
+    # Try configured API URL, then fallback endpoints
+    target_bases = []
+    if env_api_base:
+        target_bases.append(env_api_base)
+    target_bases.extend(["https://nskmedia.net", "http://127.0.0.1:8000", "http://localhost:8000"])
 
-    connector = get_doh_connector()
-    try:
-        async with aiohttp.ClientSession(connector=connector) as session:
-            async with session.get(url, timeout=aiohttp.ClientTimeout(total=15)) as resp:
-                if resp.status == 200:
-                    data = await resp.json()
-                    if data.get("status") == "success":
-                        v_info = data.get("video_info", {})
-                        stream_url = None
+    # Remove duplicates preserving order
+    seen = set()
+    unique_bases = []
+    for b in target_bases:
+        if b and b not in seen:
+            seen.add(b)
+            unique_bases.append(b)
 
-                        if mode == "audio":
-                            audio_raw = data.get("audio_only")
-                            if isinstance(audio_raw, str):
-                                stream_url = audio_raw
-                            elif isinstance(audio_raw, dict):
-                                stream_url = audio_raw.get("url")
+    for api_base in unique_bases:
+        url = f"{api_base}/api/extract?video_id={video_id}&api_key={api_key}"
+        print(f"[Scraper/GameOverAPI] Requesting stream from: {url}")
+        
+        try:
+            timeout = aiohttp.ClientTimeout(total=12)
+            connector = aiohttp.TCPConnector(ssl=False)
+            async with aiohttp.ClientSession(timeout=timeout, connector=connector) as session:
+                async with session.get(url) as resp:
+                    if resp.status == 200:
+                        data = await resp.json()
+                        if data.get("status") == "success":
+                            v_info = data.get("video_info", {})
+                            stream_url = None
 
-                        # Video Mode: Respect Bot Quality & FPS Preferences set in /admin
-                        if mode == "video" and data.get("streams"):
-                            from core.db import get_setting
-                            target_q   = get_setting("quality_pref") or "720p"
-                            target_fps = get_setting("fps_pref") or "60"
+                            if mode == "audio":
+                                audio_raw = data.get("audio_only")
+                                if isinstance(audio_raw, str):
+                                    stream_url = audio_raw
+                                elif isinstance(audio_raw, dict):
+                                    stream_url = audio_raw.get("url")
 
-                            streams_dict = data.get("streams", {})
-                            preferred_keys = [
-                                f"{target_q}{target_fps}",
-                                target_q,
-                                "1080p60", "1080p", "720p60", "720p", "2K60", "2K", "4K60", "4K", "480p"
-                            ]
-                            for pk in preferred_keys:
-                                if pk in streams_dict:
-                                    val = streams_dict[pk]
-                                    stream_url = val if isinstance(val, str) else (val.get("video_url") or val.get("url"))
-                                    if stream_url:
-                                        print(f"[Scraper/GameOverAPI] Selected preferred stream quality: {pk}")
+                            # Video Mode: Respect Bot Quality & FPS Preferences set in /admin
+                            if mode == "video" and data.get("streams"):
+                                from core.db import get_setting
+                                target_q   = get_setting("quality_pref") or "720p"
+                                target_fps = get_setting("fps_pref") or "60"
+
+                                streams_dict = data.get("streams", {})
+                                preferred_keys = [
+                                    f"{target_q}{target_fps}",
+                                    target_q,
+                                    "1080p60", "1080p", "720p60", "720p", "2K60", "2K", "4K60", "4K", "480p"
+                                ]
+                                for pk in preferred_keys:
+                                    if pk in streams_dict:
+                                        val = streams_dict[pk]
+                                        stream_url = val if isinstance(val, str) else (val.get("video_url") or val.get("url"))
+                                        if stream_url:
+                                            print(f"[Scraper/GameOverAPI] Selected preferred stream quality: {pk}")
+                                            break
+
+                            if not stream_url:
+                                merged_raw = data.get("best_merged")
+                                if isinstance(merged_raw, str):
+                                    stream_url = merged_raw
+                                elif isinstance(merged_raw, dict):
+                                    stream_url = merged_raw.get("url") or merged_raw.get("video_url")
+
+                            if not stream_url and data.get("streams"):
+                                streams_dict = data.get("streams", {})
+                                for q_label, s_val in streams_dict.items():
+                                    if isinstance(s_val, str):
+                                        stream_url = s_val
                                         break
+                                    elif isinstance(s_val, dict):
+                                        stream_url = s_val.get("video_url") or s_val.get("url")
+                                        if stream_url:
+                                            break
 
-                        if not stream_url:
-                            merged_raw = data.get("best_merged")
-                            if isinstance(merged_raw, str):
-                                stream_url = merged_raw
-                            elif isinstance(merged_raw, dict):
-                                stream_url = merged_raw.get("url") or merged_raw.get("video_url")
+                            if stream_url:
+                                print(f"[Scraper/GameOverAPI] SUCCESS! Extracted Stream URL from {api_base}")
+                                return {
+                                    "url": stream_url,
+                                    "title": v_info.get("title") or "YouTube Stream",
+                                    "duration": v_info.get("duration", 0),
+                                    "thumbnail": v_info.get("thumbnail") or f"https://img.youtube.com/vi/{video_id}/hqdefault.jpg"
+                                }
+        except Exception as e:
+            print(f"[Scraper/GameOverAPI] Error calling {api_base}: {e}")
 
-                        if not stream_url and data.get("streams"):
-                            streams_dict = data.get("streams", {})
-                            for q_label, s_val in streams_dict.items():
-                                if isinstance(s_val, str):
-                                    stream_url = s_val
-                                    break
-                                elif isinstance(s_val, dict):
-                                    stream_url = s_val.get("video_url") or s_val.get("url")
-                                    if stream_url:
-                                        break
-
-                        if stream_url:
-                            return {
-                                "url": stream_url,
-                                "title": v_info.get("title", "YouTube Video"),
-                                "duration": v_info.get("duration", 0),
-                                "thumbnail": v_info.get("thumbnail", f"https://img.youtube.com/vi/{video_id}/hqdefault.jpg"),
-                            }
-    except Exception as e:
-        print(f"[Scraper/GameOverAPI] Extraction note: {e}")
     return None
 
 
