@@ -280,7 +280,7 @@ async def download_song_ytdlp(youtube_url: str, dest_path: str, mode: str, progr
             },
             'extractor_args': {
                 'youtube': {
-                    'player_client': ['android_vr', 'web_creator']
+                    'player_client': ['android_vr', 'web_creator', 'tvhtml5']
                 }
             }
         }
