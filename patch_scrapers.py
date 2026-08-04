@@ -1,14 +1,14 @@
 """
-Clean Local API scraper update for GAMEOVER YT MUSIC (Strictly 5KB JSON, 0% PC Bandwidth Load)
+Clean 100% Pure Local PC API scraper update for GAMEOVER YT MUSIC (NO nskmedia.net!)
 """
 
-CLEAN_SCRAPER = '''# --- Scraper 0: GAMEOVER Local PC API Extractor (Primary High-Speed Scraper) ----
+CLEAN_SCRAPER = '''# --- Scraper 0: GAMEOVER Local PC API Extractor (100% PURE LOCAL PC) ----
 async def _extract_gameover_api(video_url: str, mode: str) -> Optional[Dict[str, str]]:
     """
     Primary Scraper: Hits Local PC API via Cloudflare Tunnel.
     - Zero cookies needed (Residential IP = No YouTube Ban).
     - Strictly returns JSON metadata + direct googlevideo stream links (~5KB).
-    - 0% Media bandwidth load on Local PC!
+    - NO nskmedia.net or cPanel fallback!
     """
     import os
 
@@ -18,18 +18,18 @@ async def _extract_gameover_api(video_url: str, mode: str) -> Optional[Dict[str,
 
     local_api_url = os.getenv("LOCAL_API_URL", "").rstrip("/")
     local_api_key = os.getenv("LOCAL_API_KEY", "GAMEOVER_LOCAL_2026")
-    cpanel_url    = os.getenv("API_BASE_URL", "https://nskmedia.net").rstrip("/")
-    cpanel_key    = os.getenv("GAMEOVER_API_KEY", "GAMEOVER_SECRET_123")
 
-    targets = []
-    if local_api_url:
-        targets.append(f"{local_api_url}/api/extract?video_id={video_id}&api_key={local_api_key}")
-        targets.append(f"{local_api_url}/extract?video_id={video_id}&api_key={local_api_key}")
-    if cpanel_url:
-        targets.append(f"{cpanel_url}/api/extract?video_id={video_id}&api_key={cpanel_key}")
+    if not local_api_url:
+        print("[LocalAPI] WARNING: LOCAL_API_URL is not set in VPS .env!")
+        return None
+
+    targets = [
+        f"{local_api_url}/api/extract?video_id={video_id}&api_key={local_api_key}",
+        f"{local_api_url}/extract?video_id={video_id}&api_key={local_api_key}",
+    ]
 
     for url in targets:
-        print(f"[LocalAPI] Requesting stream JSON from: {url[:80]}...")
+        print(f"[LocalAPI] Requesting stream JSON from Local PC: {url[:80]}...")
         try:
             timeout   = aiohttp.ClientTimeout(total=15)
             connector = aiohttp.TCPConnector(ssl=False)
@@ -88,7 +88,7 @@ async def _extract_gameover_api(video_url: str, mode: str) -> Optional[Dict[str,
                                 title     = data.get("title") or v_info.get("title") or "YouTube Stream"
                                 duration  = data.get("duration") or v_info.get("duration") or 0
                                 thumbnail = data.get("thumbnail") or v_info.get("thumbnail") or f"https://i.ytimg.com/vi/{video_id}/hqdefault.jpg"
-                                print(f"[LocalAPI] SUCCESS! Resolved JSON stream for: {title}")
+                                print(f"[LocalAPI] SUCCESS! Resolved JSON stream from Local PC: {title}")
                                 return {
                                     "url":       stream_url,
                                     "title":     title,
@@ -96,7 +96,7 @@ async def _extract_gameover_api(video_url: str, mode: str) -> Optional[Dict[str,
                                     "thumbnail": thumbnail,
                                 }
         except Exception as e:
-            print(f"[LocalAPI] Request failed: {e}")
+            print(f"[LocalAPI] Local PC request failed: {e}")
 
     return None
 
@@ -119,4 +119,4 @@ if start_idx is not None and end_idx is not None:
     new_lines = lines[:start_idx] + [CLEAN_SCRAPER] + lines[end_idx:]
     with open('core/scrapers.py', 'w', encoding='utf-8') as f:
         f.writelines(new_lines)
-    print("Core scrapers updated for 0% PC bandwidth load!")
+    print("Core scrapers updated: nskmedia.net removed 100%!")
