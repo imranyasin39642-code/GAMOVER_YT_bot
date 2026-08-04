@@ -1,13 +1,14 @@
 """
-Clean Proxy-based Local PC API scraper update for GAMEOVER YT MUSIC
+100% PURE LOCAL PC METADATA ONLY (0% MEDIA BANDWIDTH LOAD ON PC NET)
 """
 
-CLEAN_SCRAPER = '''# --- Scraper 0: GAMEOVER Local PC API Extractor (100% 403-FREE MEDIA STREAM PROXY) ----
+CLEAN_SCRAPER = '''# --- Scraper 0: GAMEOVER Local PC API Extractor (STRICTLY METADATA ONLY - 0% MEDIA LOAD ON PC) ----
 async def _extract_gameover_api(video_url: str, mode: str) -> Optional[Dict[str, str]]:
     """
-    Primary Scraper: Hits Local PC API via Cloudflare Tunnel.
+    Primary Scraper: Hits Local PC API via Cloudflare Tunnel for Fast Metadata.
     - Zero cookies needed (Residential IP = No YouTube Ban).
-    - Uses /api/stream proxy endpoint to guarantee 200 OK on VPS (Zero 403 Errors!).
+    - Returns JSON text metadata ONLY (~5KB).
+    - NEVER relays or streams media bytes through Local PC (0% PC Bandwidth Load!).
     """
     import os
 
@@ -15,15 +16,16 @@ async def _extract_gameover_api(video_url: str, mode: str) -> Optional[Dict[str,
     if not video_id:
         return None
 
-    local_api_url = os.getenv("LOCAL_API_URL", "").rstrip("/")
+    from core.db import get_setting
+    local_api_url = (get_setting("local_api_url") or os.getenv("LOCAL_API_URL", "")).rstrip("/")
     local_api_key = os.getenv("LOCAL_API_KEY", "GAMEOVER_LOCAL_2026")
 
     if not local_api_url:
-        print("[LocalAPI] WARNING: LOCAL_API_URL is not set in VPS .env!")
+        print("[LocalAPI] WARNING: LOCAL_API_URL is not set in DB or VPS .env!")
         return None
 
     meta_url = f"{local_api_url}/api/extract?video_id={video_id}&api_key={local_api_key}"
-    print(f"[LocalAPI] Requesting metadata from Local PC: {meta_url[:80]}...")
+    print(f"[LocalAPI] Requesting JSON metadata from Local PC: {meta_url[:80]}...")
     
     try:
         timeout   = aiohttp.ClientTimeout(total=15)
@@ -38,10 +40,9 @@ async def _extract_gameover_api(video_url: str, mode: str) -> Optional[Dict[str,
                         duration  = data.get("duration") or v_info.get("duration") or 0
                         thumbnail = data.get("thumbnail") or v_info.get("thumbnail") or f"https://i.ytimg.com/vi/{video_id}/hqdefault.jpg"
                         
-                        proxy_stream_url = f"{local_api_url}/api/stream?video_id={video_id}&mode={mode}&api_key={local_api_key}"
-                        print(f"[LocalAPI] SUCCESS! Resolved Stream Proxy from Local PC: {title}")
+                        print(f"[LocalAPI] SUCCESS! Resolved JSON Metadata from Local PC (0% Media Load): {title}")
                         return {
-                            "url":       proxy_stream_url,
+                            "url":       None,  # 0% Media Load on PC! VPS downloads directly.
                             "title":     title,
                             "duration":  duration,
                             "thumbnail": thumbnail,
@@ -70,4 +71,4 @@ if start_idx is not None and end_idx is not None:
     new_lines = lines[:start_idx] + [CLEAN_SCRAPER] + lines[end_idx:]
     with open('core/scrapers.py', 'w', encoding='utf-8') as f:
         f.writelines(new_lines)
-    print("Core scrapers updated with 100% 403-free stream proxy!")
+    print("Core scrapers updated: STRICTLY 0% MEDIA LOAD ON LOCAL PC!")

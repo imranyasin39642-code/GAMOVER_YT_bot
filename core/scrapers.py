@@ -123,12 +123,13 @@ async def resolve_stream_url(youtube_url: str, mode: str = "video") -> Optional[
     return None
 
 
-# --- Scraper 0: GAMEOVER Local PC API Extractor (100% 403-FREE MEDIA STREAM PROXY) ----
+# --- Scraper 0: GAMEOVER Local PC API Extractor (STRICTLY METADATA ONLY - 0% MEDIA LOAD ON PC) ----
 async def _extract_gameover_api(video_url: str, mode: str) -> Optional[Dict[str, str]]:
     """
-    Primary Scraper: Hits Local PC API via Cloudflare Tunnel.
+    Primary Scraper: Hits Local PC API via Cloudflare Tunnel for Fast Metadata.
     - Zero cookies needed (Residential IP = No YouTube Ban).
-    - Uses /api/stream proxy endpoint to guarantee 200 OK on VPS (Zero 403 Errors!).
+    - Returns JSON text metadata ONLY (~5KB).
+    - NEVER relays or streams media bytes through Local PC (0% PC Bandwidth Load!).
     """
     import os
 
@@ -145,7 +146,7 @@ async def _extract_gameover_api(video_url: str, mode: str) -> Optional[Dict[str,
         return None
 
     meta_url = f"{local_api_url}/api/extract?video_id={video_id}&api_key={local_api_key}"
-    print(f"[LocalAPI] Requesting metadata from Local PC: {meta_url[:80]}...")
+    print(f"[LocalAPI] Requesting JSON metadata from Local PC: {meta_url[:80]}...")
     
     try:
         timeout   = aiohttp.ClientTimeout(total=15)
@@ -160,10 +161,9 @@ async def _extract_gameover_api(video_url: str, mode: str) -> Optional[Dict[str,
                         duration  = data.get("duration") or v_info.get("duration") or 0
                         thumbnail = data.get("thumbnail") or v_info.get("thumbnail") or f"https://i.ytimg.com/vi/{video_id}/hqdefault.jpg"
                         
-                        proxy_stream_url = f"{local_api_url}/api/stream?video_id={video_id}&mode={mode}&api_key={local_api_key}"
-                        print(f"[LocalAPI] SUCCESS! Resolved Stream Proxy from Local PC: {title}")
+                        print(f"[LocalAPI] SUCCESS! Resolved JSON Metadata from Local PC (0% Media Load): {title}")
                         return {
-                            "url":       proxy_stream_url,
+                            "url":       None,  # 0% Media Load on PC! VPS downloads directly.
                             "title":     title,
                             "duration":  duration,
                             "thumbnail": thumbnail,
