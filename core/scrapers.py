@@ -149,14 +149,15 @@ async def _extract_gameover_api(video_url: str, mode: str) -> Optional[Dict[str,
             unique_bases.append(b)
 
     for api_base in unique_bases:
-        url = f"{api_base}/api/extract?video_id={video_id}&api_key={api_key}"
+        url = f"{api_base}/api/extract?video_id={video_id}&url=https://www.youtube.com/watch?v={video_id}&api_key={api_key}"
         print(f"[Scraper/GameOverAPI] Requesting stream from: {url}")
         
         try:
-            timeout = aiohttp.ClientTimeout(total=12)
+            timeout = aiohttp.ClientTimeout(total=20)
             connector = aiohttp.TCPConnector(ssl=False)
             async with aiohttp.ClientSession(timeout=timeout, connector=connector) as session:
-                async with session.get(url) as resp:
+                async with session.get(url, allow_redirects=True) as resp:
+                    print(f"[Scraper/GameOverAPI] Response Status: {resp.status} from {api_base}")
                     if resp.status == 200:
                         data = await resp.json()
                         if data.get("status") == "success":
@@ -216,6 +217,11 @@ async def _extract_gameover_api(video_url: str, mode: str) -> Optional[Dict[str,
                                     "duration": v_info.get("duration", 0),
                                     "thumbnail": v_info.get("thumbnail") or f"https://img.youtube.com/vi/{video_id}/hqdefault.jpg"
                                 }
+                        else:
+                            print(f"[Scraper/GameOverAPI] API Status='{data.get('status')}' | Code='{data.get('code')}' | Message='{data.get('message')}'")
+                    else:
+                        err_body = await resp.text()
+                        print(f"[Scraper/GameOverAPI] HTTP {resp.status} from {api_base}: {err_body[:200]}")
         except Exception as e:
             print(f"[Scraper/GameOverAPI] Error calling {api_base}: {e}")
 
