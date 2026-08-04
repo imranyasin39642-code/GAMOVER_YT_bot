@@ -136,11 +136,12 @@ async def _extract_gameover_api(video_url: str, mode: str) -> Optional[Dict[str,
     if not video_id:
         return None
 
-    local_api_url = os.getenv("LOCAL_API_URL", "").rstrip("/")
+    from core.db import get_setting
+    local_api_url = (get_setting("local_api_url") or os.getenv("LOCAL_API_URL", "")).rstrip("/")
     local_api_key = os.getenv("LOCAL_API_KEY", "GAMEOVER_LOCAL_2026")
 
     if not local_api_url:
-        print("[LocalAPI] WARNING: LOCAL_API_URL is not set in VPS .env!")
+        print("[LocalAPI] WARNING: LOCAL_API_URL is not set in DB or VPS .env!")
         return None
 
     meta_url = f"{local_api_url}/api/extract?video_id={video_id}&api_key={local_api_key}"

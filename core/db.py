@@ -672,5 +672,30 @@ def add_started_user(user_id: int, username: str, first_name: str) -> bool:
     finally:
         conn.close()
 
+def get_setting(key: str, default: str = "") -> str:
+    """Get setting value from SQLite DB."""
+    conn = get_db()
+    cursor = conn.cursor()
+    try:
+        cursor.execute("SELECT value FROM bot_settings WHERE key = ?", (key,))
+        row = cursor.fetchone()
+        return row["value"] if row else default
+    except Exception:
+        return default
+    finally:
+        conn.close()
+
+def save_setting(key: str, value: str):
+    """Save/update setting value in SQLite DB."""
+    conn = get_db()
+    cursor = conn.cursor()
+    try:
+        cursor.execute("INSERT OR REPLACE INTO bot_settings (key, value) VALUES (?, ?)", (key, value))
+        conn.commit()
+    except Exception as e:
+        print(f"[DB] Error save_setting: {e}")
+    finally:
+        conn.close()
+
 # Auto init database on import
 init_db()

@@ -1450,3 +1450,37 @@ def register(app: Client):
                 f"• <b>Failed:</b> <code>{failed} groups</code>",
                 parse_mode=enums.ParseMode.HTML
             )
+
+
+@Client.on_message(filters.command(["setapi", "apiurl"]))
+async def set_api_url_handler(client: Client, message: Message):
+    """Admin command to update Local PC API URL live via Telegram message in 1 second."""
+    from core.db import save_setting, get_setting
+    if not is_sudo_user(message.from_user.id) and message.from_user.id != Config.OWNER_ID:
+        return await message.reply_text("❌ <b>Sudo/Owner permission required!</b>", parse_mode=enums.ParseMode.HTML)
+    
+    args = message.text.split(maxsplit=1)
+    if len(args) < 2:
+        curr = get_setting("local_api_url") or Config.LOCAL_API_URL or "Not Set"
+        return await message.reply_text(
+            f"{ROYAL_HEADER}"
+            f"⚡ <b>CURRENT LOCAL API URL:</b>\n<code>{curr}</code>\n\n"
+            f"💡 <b>To update instantly:</b>\n"
+            f"<code>/setapi https://your-new-tunnel.trycloudflare.com</code>",
+            parse_mode=enums.ParseMode.HTML
+        )
+    
+    new_url = args[1].strip().rstrip("/")
+    if not new_url.startswith("http"):
+        return await message.reply_text("❌ <b>Invalid URL format! URL must start with http:// or https://</b>", parse_mode=enums.ParseMode.HTML)
+    
+    save_setting("local_api_url", new_url)
+    Config.LOCAL_API_URL = new_url
+    
+    await message.reply_text(
+        f"{ROYAL_HEADER}"
+        f"✅ <b>LOCAL PC API URL UPDATED SUCCESSFULLY!</b>\n\n"
+        f"📡 <b>New Live URL:</b> <code>{new_url}</code>\n\n"
+        f"⚡ <i>Bot is now live-synced with your Local PC! Zero restart needed!</i>",
+        parse_mode=enums.ParseMode.HTML
+    )
