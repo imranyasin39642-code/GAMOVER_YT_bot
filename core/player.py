@@ -259,7 +259,7 @@ async def download_song_ytdlp(youtube_url: str, dest_path: str, mode: str, progr
             format_spec = f"bestvideo[height<={max_h}][fps<={fps_val}]+bestaudio/best[height<={max_h}]/best"
             print(f"[Downloader] Fallback yt-dlp Target Quality: {q} ({max_h}p) @ {fps_val} FPS")
         else:
-            format_spec = "bestaudio/best"
+            format_spec = "bestaudio[ext=m4a]/bestaudio/best"
 
         # Safe clean up of broken non-target files (ignore lock errors)
         for f in glob.glob(base_path + "*"):
@@ -289,7 +289,7 @@ async def download_song_ytdlp(youtube_url: str, dest_path: str, mode: str, progr
             },
             'extractor_args': {
                 'youtube': {
-                    'player_client': ['android_vr', 'ios', 'web_creator', 'tvhtml5', 'android']
+                    'player_client': ['android_vr', 'web_creator', 'android']
                 }
             }
         }

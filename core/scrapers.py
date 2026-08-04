@@ -247,7 +247,7 @@ async def _extract_ytdlp_direct(video_url: str, mode: str) -> Optional[Dict[str,
             },
             'extractor_args': {
                 'youtube': {
-                    'player_client': ['android_vr', 'ios', 'web_creator', 'tvhtml5']
+                    'player_client': ['android_vr', 'web_creator', 'android']
                 }
             }
         }
@@ -743,7 +743,7 @@ async def extract_youtube_playlist(playlist_url: str) -> Optional[list]:
             'no_warnings': True,
             'extractor_args': {
                 'youtube': {
-                    'player_client': ['android_vr', 'ios', 'web_creator', 'tvhtml5']
+                    'player_client': ['android_vr', 'web_creator', 'android']
                 }
             }
         }
