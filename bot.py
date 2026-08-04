@@ -32,20 +32,31 @@ def _markup_to_bot_api_json(markup: InlineKeyboardMarkup) -> list:
         rows.append(btn_row)
     return rows
 
-async def send_styled(chat_id: int, text: str, markup: InlineKeyboardMarkup = None, parse_mode: str = "HTML", message_id: int = None) -> dict:
+def make_card(text: str, expandable: bool = False) -> str:
+    """Wrap text inside Telegram HTML Blockquote tag for global Card UI."""
+    if not text:
+        return ""
+    clean = text.strip()
+    if "<blockquote" in clean:
+        return clean
+    tag = "<blockquote expandable>" if expandable else "<blockquote>"
+    return f"{tag}{clean}</blockquote>"
+
+async def send_styled(chat_id: int, text: str, markup: InlineKeyboardMarkup = None, parse_mode: str = "HTML", message_id: int = None, expandable: bool = False, disable_preview: bool = True) -> dict:
     """
     Send or edit a message using Bot HTTP API so that native button 'style'
     (success/danger/primary) is preserved — Telegram Bot API 9.4+.
-    Returns the response JSON dict.
+    Automatically wraps text in blockquote card format.
     """
     import aiohttp, json
     token = Config.BOT_TOKEN
     endpoint = f"https://api.telegram.org/bot{token}/"
+    card_text = make_card(text, expandable=expandable)
     payload = {
         "chat_id": chat_id,
-        "text": text,
+        "text": card_text,
         "parse_mode": parse_mode,
-        "disable_web_page_preview": True
+        "disable_web_page_preview": disable_preview
     }
     if markup:
         payload["reply_markup"] = json.dumps({
@@ -55,23 +66,24 @@ async def send_styled(chat_id: int, text: str, markup: InlineKeyboardMarkup = No
     if message_id:
         payload["message_id"] = message_id
     try:
-        timeout = aiohttp.ClientTimeout(total=10.0)
-        async with aiohttp.ClientSession(timeout=timeout) as session:
+        timeout = aiohttp.ClientTimeout(total=8.0)
+        connector = aiohttp.TCPConnector(ssl=False)
+        async with aiohttp.ClientSession(timeout=timeout, connector=connector) as session:
             async with session.post(endpoint + method, json=payload) as resp:
                 return await resp.json()
-    except Exception as e:
-        print(f"[BotAPI] send_styled error: {e}")
+    except Exception:
         return {}
 
-async def edit_styled(chat_id: int, text: str, markup: InlineKeyboardMarkup = None, parse_mode: str = "HTML", message_id: int = None, is_video: bool = False) -> dict:
+async def edit_styled(chat_id: int, text: str, markup: InlineKeyboardMarkup = None, parse_mode: str = "HTML", message_id: int = None, is_video: bool = False, expandable: bool = False, disable_preview: bool = True) -> dict:
     """
     Edit text or caption of a video message using Bot HTTP API so that native button 'style'
-    is preserved.
+    is preserved. Automatically wraps text in blockquote card format.
     """
     import aiohttp, json
     token = Config.BOT_TOKEN
     endpoint = f"https://api.telegram.org/bot{token}/"
     
+    card_text = make_card(text, expandable=expandable)
     method = "editMessageText"
     payload = {
         "chat_id": chat_id,
@@ -81,10 +93,10 @@ async def edit_styled(chat_id: int, text: str, markup: InlineKeyboardMarkup = No
     
     if is_video:
         method = "editMessageCaption"
-        payload["caption"] = text
+        payload["caption"] = card_text
     else:
-        payload["text"] = text
-        payload["disable_web_page_preview"] = True
+        payload["text"] = card_text
+        payload["disable_web_page_preview"] = disable_preview
         
     if markup:
         payload["reply_markup"] = json.dumps({
@@ -92,12 +104,34 @@ async def edit_styled(chat_id: int, text: str, markup: InlineKeyboardMarkup = No
         })
         
     try:
-        timeout = aiohttp.ClientTimeout(total=10.0)
-        async with aiohttp.ClientSession(timeout=timeout) as session:
+        timeout = aiohttp.ClientTimeout(total=8.0)
+        connector = aiohttp.TCPConnector(ssl=False)
+        async with aiohttp.ClientSession(timeout=timeout, connector=connector) as session:
             async with session.post(endpoint + method, json=payload) as resp:
                 return await resp.json()
-    except Exception as e:
-        print(f"[BotAPI] edit_styled error: {e}")
+    except Exception:
+        return {}
+
+async def edit_reply_markup_styled(chat_id: int, message_id: int, markup: InlineKeyboardMarkup = None) -> dict:
+    """Edit reply_markup of a message using Bot HTTP API so native button 'style' is preserved."""
+    import aiohttp, json
+    token = Config.BOT_TOKEN
+    endpoint = f"https://api.telegram.org/bot{token}/editMessageReplyMarkup"
+    payload = {
+        "chat_id": chat_id,
+        "message_id": message_id
+    }
+    if markup:
+        payload["reply_markup"] = json.dumps({
+            "inline_keyboard": _markup_to_bot_api_json(markup)
+        })
+    try:
+        timeout = aiohttp.ClientTimeout(total=8.0)
+        connector = aiohttp.TCPConnector(ssl=False)
+        async with aiohttp.ClientSession(timeout=timeout, connector=connector) as session:
+            async with session.post(endpoint, json=payload) as resp:
+                return await resp.json()
+    except Exception:
         return {}
 
 # Ensure config validation
@@ -108,7 +142,8 @@ bot = Client(
     api_id=Config.API_ID,
     api_hash=Config.API_HASH,
     bot_token=Config.BOT_TOKEN,
-    workdir=Config.PROJECT_ROOT
+    workdir=Config.PROJECT_ROOT,
+    proxy=Config.get_proxy_config()
 )
 
 assistant = Client(
@@ -116,7 +151,8 @@ assistant = Client(
     api_id=Config.API_ID,
     api_hash=Config.API_HASH,
     session_string=Config.STRING_SESSION,
-    workdir=Config.PROJECT_ROOT
+    workdir=Config.PROJECT_ROOT,
+    proxy=Config.get_proxy_config()
 )
 
 async def main():
@@ -136,10 +172,17 @@ async def main():
     try:
         await bot.set_bot_commands([
             BotCommand("vd", "Stream YouTube video on voice chat (720p 60fps)"),
-            BotCommand("video", "Stream YouTube video on voice chat (720p 60fps)"),
-            BotCommand("audio", "Stream YouTube audio on voice chat"),
-            BotCommand("ad", "Stream YouTube audio on voice chat"),
+            BotCommand("ad", "Stream YouTube high-quality audio"),
+            BotCommand("list", "Play YouTube playlist in video mode"),
+            BotCommand("la", "Play YouTube playlist in audio mode"),
+            BotCommand("plresume", "Resume saved playlist from last song"),
+            BotCommand("playlists", "View & resume saved group playlists history"),
+            BotCommand("skip", "Skip to the next queued track"),
+            BotCommand("pause", "Pause the active stream"),
+            BotCommand("resume", "Resume the paused stream"),
             BotCommand("stop", "Stop playback and leave voice chat"),
+            BotCommand("queue", "View upcoming songs in queue"),
+            BotCommand("help", "Show help and commands guide"),
         ])
         print("[Bot] Native menu commands registered successfully!")
     except Exception as e:

@@ -18,13 +18,30 @@ from pyrogram import Client, filters, enums
 from pyrogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
 
 from config import Config
-from core.db import is_sudo_user, get_broadcast_groups, set_group_broadcast_enabled, get_db, set_group_welcome_enabled, set_group_bot_active
+from core.db import is_sudo_user, get_broadcast_groups, set_group_broadcast_enabled, get_db, set_group_welcome_enabled, set_group_bot_active, update_group_info
 from core.player import player_manager
+from bot import make_card
 
 ROYAL_HEADER = "👑 <b>ɢᴀᴍᴇᴏᴠᴇʀ ᴀᴅᴍɪɴ ᴘᴀɴᴇʟ 👑</b>\n\n"
 
 # In-memory dictionary to store admin states (e.g. if they are in broadcast input mode)
 admin_states = {}
+
+async def sync_groups_from_telegram(client: Client) -> list:
+    """Sync active group dialogs with SQLite DB if DB has 0 groups."""
+    groups = get_broadcast_groups()
+    if not groups:
+        try:
+            ast = player_manager._assistant
+            if ast:
+                async for dialog in ast.get_dialogs():
+                    chat = getattr(dialog, "chat", None)
+                    if chat and getattr(chat, "type", None) in (enums.ChatType.GROUP, enums.ChatType.SUPERGROUP):
+                        update_group_info(chat.id, chat.title or "Group Chat")
+                groups = get_broadcast_groups()
+        except Exception as e:
+            print(f"[Admin] Error syncing dialogs via assistant: {e}")
+    return groups
 
 def parse_duration(duration_str: str) -> int:
     """
@@ -158,6 +175,34 @@ async def run_network_speed_test() -> tuple[float, float]:
         print(f"[Speedtest] Error: {e}")
     return 0.0, 0.0
 
+async def sync_groups_from_telegram(client: Client) -> list:
+    """
+    Validates all groups in SQLite DB against Telegram API.
+    Auto-purges stale/deleted/kicked group IDs so ONLY real active groups where bot is present remain.
+    """
+    from core.db import get_broadcast_groups, remove_group_info, update_group_info
+    raw_groups = get_broadcast_groups()
+    valid_groups = []
+    
+    for g in raw_groups:
+        c_id = g["chat_id"]
+        try:
+            chat = await client.get_chat(c_id)
+            if chat and chat.title:
+                if chat.title != g.get("title"):
+                    update_group_info(c_id, chat.title)
+                    g["title"] = chat.title
+                valid_groups.append(g)
+        except Exception as e:
+            err_s = str(e)
+            if any(k in err_s for k in ["CHANNEL_INVALID", "PEER_ID_INVALID", "CHAT_ID_INVALID", "USER_NOT_PARTICIPANT", "CHAT_ADMIN_REQUIRED", "INPUT_USER_DEACTIVATED", "Chat not found"]):
+                print(f"[DB/Sync] Purging stale dead group {c_id} ({g.get('title')}): {err_s}")
+                remove_group_info(c_id)
+            else:
+                valid_groups.append(g)
+                
+    return valid_groups
+
 def get_network_manager_markup() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([
         [
@@ -170,24 +215,51 @@ def get_network_manager_markup() -> InlineKeyboardMarkup:
         ]
     ])
 
-def get_api_manager_markup() -> InlineKeyboardMarkup:
+def get_quality_menu_markup(current_q: str = None, current_fps: str = None) -> InlineKeyboardMarkup:
+    from core.db import get_setting
+    q   = current_q or get_setting("quality_pref") or "720p"
+    fps = current_fps or get_setting("fps_pref") or "60"
+
+    q_4k_icon   = "🟢 " if q == "4K" else ""
+    q_2k_icon   = "🟢 " if q == "2K" else ""
+    q_1080_icon = "🟢 " if q == "1080p" else ""
+    q_720_icon  = "🟢 " if q == "720p" else ""
+    q_480_icon  = "🟢 " if q == "480p" else ""
+
+    fps_60_icon = "⚡ " if fps == "60" else ""
+    fps_90_icon = "⚡ " if fps == "90" else ""
+    fps_30_icon = "⚡ " if fps == "30" else ""
+
     return InlineKeyboardMarkup([
         [
-            InlineKeyboardButton("🔑 LIST ALL KEYS", callback_data="admin_api_list", style="primary"),
-            InlineKeyboardButton("⚡ GENERATE KEY", callback_data="admin_api_gen_prompt", style="success")
+            InlineKeyboardButton(f"{q_4k_icon}4K (2160p)", callback_data="set_quality|4K", style="primary"),
+            InlineKeyboardButton(f"{q_2k_icon}2K (1440p)", callback_data="set_quality|2K", style="primary")
         ],
         [
-            InlineKeyboardButton("📊 API HIT STATS", callback_data="admin_api_stats", style="primary"),
-            InlineKeyboardButton("❓ HELP & COMMANDS", callback_data="admin_api_help", style="primary")
+            InlineKeyboardButton(f"{q_1080_icon}1080p Full HD", callback_data="set_quality|1080p", style="primary"),
+            InlineKeyboardButton(f"{q_720_icon}720p HD", callback_data="set_quality|720p", style="primary"),
+            InlineKeyboardButton(f"{q_480_icon}480p SD", callback_data="set_quality|480p", style="primary")
         ],
         [
-            InlineKeyboardButton("🔙 BACK", callback_data="admin_back", style="primary"),
+            InlineKeyboardButton(f"{fps_60_icon}60 FPS Mode", callback_data="set_fps|60", style="success"),
+            InlineKeyboardButton(f"{fps_90_icon}90 FPS Mode", callback_data="set_fps|90", style="success"),
+            InlineKeyboardButton(f"{fps_30_icon}30 FPS Mode", callback_data="set_fps|30", style="secondary")
+        ],
+        [
+            InlineKeyboardButton("🔙 BACK TO DASHBOARD", callback_data="admin_back", style="primary"),
             InlineKeyboardButton("❌ CLOSE", callback_data="admin_close", style="danger")
         ]
     ])
 
 def get_admin_panel_markup() -> InlineKeyboardMarkup:
+    from core.player import player_manager
+    active_count = len(player_manager.active_calls) if (player_manager and hasattr(player_manager, 'active_calls')) else 0
+    live_label = f"🔴 LIVE STREAMS ({active_count})"
     return InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton(live_label, callback_data="admin_live_streams", style="danger"),
+            InlineKeyboardButton("⚡ QUALITY & FPS", callback_data="admin_quality_menu", style="success")
+        ],
         [
             InlineKeyboardButton("📢 BROADCAST", callback_data="admin_bc_prompt", style="success"),
             InlineKeyboardButton("👥 BC GROUPS", callback_data="admin_groups|0", style="primary")
@@ -197,101 +269,18 @@ def get_admin_panel_markup() -> InlineKeyboardMarkup:
             InlineKeyboardButton("🤖 BOT STATUS", callback_data="admin_status_groups|0", style="primary")
         ],
         [
-            InlineKeyboardButton("🔑 API MANAGER", callback_data="admin_api_manager", style="success")
-        ],
-        [
             InlineKeyboardButton("📂 FILE MANAGER", callback_data="admin_file_manager|0", style="primary"),
-            InlineKeyboardButton("🍪 COOKIES MANAGER", callback_data="admin_cookies_manager", style="primary")
+            InlineKeyboardButton("🌐 NETWORK MANAGER", callback_data="admin_network", style="primary")
         ],
         [
-            InlineKeyboardButton("🌐 NETWORK MANAGER", callback_data="admin_network", style="primary"),
-            InlineKeyboardButton("📹 MANAGE VIDEOS", callback_data="admin_manage_videos", style="primary")
+            InlineKeyboardButton("📹 MANAGE VIDEOS", callback_data="admin_manage_videos", style="primary"),
+            InlineKeyboardButton("👥 APPROVED USERS", callback_data="admin_approved_groups|0", style="success")
         ],
         [
+            InlineKeyboardButton("🔄 RELOAD BOT", callback_data="admin_reload_bot", style="danger"),
             InlineKeyboardButton("❌ CLOSE", callback_data="admin_close", style="danger")
         ]
     ])
-
-def get_cookies_status() -> str:
-    path = Config.COOKIES_FILE
-    if not os.path.exists(path):
-        return (
-            "🔴 <b>Status: NOT FOUND</b>\n\n"
-            "⚠️ <i>No cookies.txt is currently loaded. YouTube resolution might fail on VPS IP addresses without cookies.</i>"
-        )
-    
-    try:
-        size_bytes = os.path.getsize(path)
-        size_kb = size_bytes / 1024
-        mtime = os.path.getmtime(path)
-        mtime_str = datetime.fromtimestamp(mtime).strftime('%Y-%m-%d %H:%M:%S')
-        
-        line_count = 0
-        cookie_count = 0
-        has_netscape_header = False
-        youtube_cookies = 0
-        has_login_session = False
-        login_cookie_names = {"LOGIN_INFO", "__Secure-3PSID", "SID", "HSID", "SSID"}
-        
-        with open(path, "r", encoding="utf-8", errors="ignore") as f:
-            first_line = f.readline()
-            if first_line and "netscape" in first_line.lower():
-                has_netscape_header = True
-            
-            f.seek(0)
-            for line in f:
-                line_count += 1
-                if not line.strip() or line.startswith("#"):
-                    continue
-                parts = line.strip().split("\t")
-                if len(parts) >= 7:
-                    cookie_count += 1
-                    domain = parts[0].lower()
-                    name = parts[5]
-                    if "youtube.com" in domain or "google.com" in domain:
-                        youtube_cookies += 1
-                        if name in login_cookie_names:
-                            has_login_session = True
-                            
-        warnings = []
-        if not has_netscape_header:
-            warnings.append("⚠️ <b>Invalid Header:</b> File doesn't start with <code># Netscape HTTP Cookie File</code>. yt-dlp might ignore it.")
-        if youtube_cookies == 0:
-            warnings.append("⚠️ <b>No YouTube Cookies:</b> No cookies found for <code>youtube.com</code> or <code>google.com</code>.")
-        elif not has_login_session:
-            warnings.append("⚠️ <b>No Login Session:</b> Missing active login session cookies (<code>LOGIN_INFO</code> / <code>SID</code>).")
-            
-        warning_text = ""
-        if warnings:
-            warning_text = "\n\n❌ <b>Issues Detected:</b>\n" + "\n".join(warnings)
-        else:
-            warning_text = "\n\n✅ <b>All Checks Passed:</b> Cookies file is formatted correctly."
-
-        return (
-            "🟢 <b>Status: ACTIVE & LOADED</b>\n\n"
-            f"• <b>File Size:</b> <code>{size_kb:.2f} KB</code>\n"
-            f"• <b>Total Cookies:</b> <code>{cookie_count}</code>\n"
-            f"• <b>YouTube Cookies:</b> <code>{youtube_cookies}</code>\n"
-            f"• <b>Login Session:</b> <code>{'Yes' if has_login_session else 'No'}</code>\n"
-            f"• <b>Total Lines:</b> <code>{line_count}</code>\n"
-            f"• <b>Last Modified:</b> <code>{mtime_str}</code>"
-            f"{warning_text}"
-        )
-    except Exception as e:
-        return f"⚠️ <b>Status: ERROR READING FILE</b>\n<code>{str(e)}</code>"
-
-def get_cookies_manager_markup() -> InlineKeyboardMarkup:
-    has_cookies = os.path.exists(Config.COOKIES_FILE)
-    buttons = []
-    if has_cookies:
-        buttons.append([
-            InlineKeyboardButton("🗑 DELETE COOKIES", callback_data="admin_cookies_delete", style="danger")
-        ])
-    buttons.append([
-        InlineKeyboardButton("🔙 BACK", callback_data="admin_back", style="primary"),
-        InlineKeyboardButton("❌ CLOSE", callback_data="admin_close", style="danger")
-    ])
-    return InlineKeyboardMarkup(buttons)
 
 
 def get_groups_markup(groups: list, page: int) -> InlineKeyboardMarkup:
@@ -488,91 +477,7 @@ def register(app: Client):
         user_id = message.from_user.id if message.from_user else 0
         return user_id == Config.OWNER_ID or is_sudo_user(user_id)
 
-    @app.on_message(filters.document & filters.private & filters.create(is_admin_filter))
-    async def handle_cookies_upload(client: Client, message: Message):
-        doc = message.document
-        if not doc.file_name:
-            return
-        
-        file_name = doc.file_name.lower()
-        if "cookies" in file_name and file_name.endswith(".txt"):
-            status_msg = await message.reply_text(
-                f"{ROYAL_HEADER}"
-                f"📥 <b>Detecting Cookies File:</b> <code>{doc.file_name}</code>\n"
-                f"⏳ <i>Processing and updating cookies, please wait...</i>",
-                parse_mode=enums.ParseMode.HTML
-            )
-            
-            try:
-                temp_path = await message.download(file_name="temp_cookies.txt")
-                if not temp_path or not os.path.exists(temp_path):
-                    from bot import send_styled
-                    await send_styled(
-                        chat_id=message.chat.id,
-                        text=(
-                            f"{ROYAL_HEADER}"
-                            f"❌ <b>Error: Failed to download the file to VPS.</b>"
-                        ),
-                        message_id=status_msg.id
-                    )
-                    return
-                
-                is_valid = False
-                with open(temp_path, "r", encoding="utf-8", errors="ignore") as f:
-                    for line in f:
-                        if not line.strip() or line.startswith("#"):
-                            continue
-                        parts = line.strip().split("\t")
-                        if len(parts) >= 7:
-                            is_valid = True
-                            break
-                
-                if not is_valid:
-                    if os.path.exists(temp_path):
-                        os.remove(temp_path)
-                    from bot import send_styled
-                    await send_styled(
-                        chat_id=message.chat.id,
-                        text=(
-                            f"{ROYAL_HEADER}"
-                            f"❌ <b>Error: Invalid Netscape cookie format!</b>\n\n"
-                            f"Make sure you exported the cookies using a browser extension in Netscape format."
-                        ),
-                        message_id=status_msg.id
-                    )
-                    return
-                
-                dest_path = Config.COOKIES_FILE
-                if os.path.exists(dest_path):
-                    os.remove(dest_path)
-                import shutil
-                shutil.move(temp_path, dest_path)
-                
-                status_text = get_cookies_status()
-                markup = get_cookies_manager_markup()
-                
-                from bot import send_styled
-                await send_styled(
-                    chat_id=message.chat.id,
-                    text=(
-                        f"{ROYAL_HEADER}"
-                        f"✅ <b>Cookies Updated Successfully!</b>\n\n"
-                        f"{status_text}"
-                    ),
-                    markup=markup,
-                    message_id=status_msg.id
-                )
-            except Exception as e:
-                from bot import send_styled
-                await send_styled(
-                    chat_id=message.chat.id,
-                    text=(
-                        f"{ROYAL_HEADER}"
-                        f"❌ <b>Error updating cookies:</b>\n"
-                        f"<code>{str(e)}</code>"
-                    ),
-                    message_id=status_msg.id
-                )
+
 
     @app.on_message(filters.command("admin") & filters.private & filters.create(is_admin_filter))
     async def admin_panel(client: Client, message: Message):
@@ -635,7 +540,7 @@ def register(app: Client):
                 parse_mode=enums.ParseMode.HTML
             )
 
-    @app.on_callback_query(filters.regex(r"^admin_"))
+    @app.on_callback_query(filters.regex(r"^(admin_|set_quality|set_fps)"))
     async def admin_callback(client: Client, query: CallbackQuery):
         user_id = query.from_user.id if query.from_user else 0
         if user_id != Config.OWNER_ID and not is_sudo_user(user_id):
@@ -656,44 +561,265 @@ def register(app: Client):
             await query.answer("Back...")
             cpu_usage = await get_cpu_usage()
             ram_usage = psutil.virtual_memory().percent if psutil else "N/A"
+            text = make_card(
+                f"{ROYAL_HEADER}"
+                f"Welcome to the bot control dashboard, Owner.\n\n"
+                f"💻 <b>System Status:</b>\n"
+                f"• CPU Usage: <code>{cpu_usage}%</code>\n"
+                f"• RAM Usage: <code>{ram_usage}%</code>\n\n"
+                f"ℹ️ <b>Quick Guide:</b>\n"
+                f"• <b>BROADCAST</b>: Send announcement to all groups.\n"
+                f"• <b>BC GROUPS</b>: Toggle group broadcast targets.\n"
+                f"• <b>WELCOME SETTINGS</b>: Toggle welcome message cards.\n"
+                f"• <b>BOT STATUS</b>: Toggle bot playback functionality per group.\n\n"
+                f"Select an operation below:"
+            )
+            markup = get_admin_panel_markup()
+            try:
+                await query.message.edit_text(text, reply_markup=markup)
+            except Exception:
+                pass
+
+        elif data == "admin_quality_menu":
+            await query.answer("Opening Quality & FPS Settings...")
+            from core.db import get_setting
+            q = get_setting("quality_pref") or "720p"
+            fps = get_setting("fps_pref") or "60"
+            text = make_card(
+                f"{ROYAL_HEADER}"
+                f"⚡ <b>VIDEO QUALITY & FPS MANAGER</b> ⚡\n\n"
+                f"Current Active Stream Target:\n"
+                f"• <b>Target Quality:</b> <code>{q}</code>\n"
+                f"• <b>Framerate Mode:</b> <code>{fps} FPS</code>\n\n"
+                f"<i>Select your preferred resolution or framerate below. All Telegram video streams will extract using these quality settings!</i>"
+            )
+            markup = get_quality_menu_markup()
+            try:
+                await query.message.edit_text(text, reply_markup=markup)
+            except Exception:
+                pass
+
+        elif data.startswith("set_quality|"):
+            new_q = data.split("|")[1]
+            from core.db import set_setting, get_setting
+            set_setting("quality_pref", new_q)
+            print(f"[Admin] Quality updated to '{new_q}' in database by user {user_id}")
+            await query.answer(f"✅ Quality set to {new_q}!")
+            fps = get_setting("fps_pref") or "60"
+            text = make_card(
+                f"{ROYAL_HEADER}"
+                f"⚡ <b>VIDEO QUALITY & FPS MANAGER</b> ⚡\n\n"
+                f"✅ <b>Updated Target Resolution to {new_q}!</b>\n\n"
+                f"Current Active Stream Target:\n"
+                f"• <b>Target Quality:</b> <code>{new_q}</code>\n"
+                f"• <b>Framerate Mode:</b> <code>{fps} FPS</code>\n\n"
+                f"<i>Select your preferred resolution or framerate below:</i>"
+            )
+            markup = get_quality_menu_markup(current_q=new_q, current_fps=fps)
+            try:
+                await query.message.edit_text(text, reply_markup=markup)
+            except Exception as e:
+                print(f"[Admin] set_quality edit note: {e}")
+
+        elif data.startswith("set_fps|"):
+            new_fps = data.split("|")[1]
+            from core.db import set_setting, get_setting
+            set_setting("fps_pref", new_fps)
+            print(f"[Admin] FPS Mode updated to '{new_fps} FPS' in database by user {user_id}")
+            await query.answer(f"⚡ FPS Mode set to {new_fps} FPS!")
+            q = get_setting("quality_pref") or "720p"
+            text = make_card(
+                f"{ROYAL_HEADER}"
+                f"⚡ <b>VIDEO QUALITY & FPS MANAGER</b> ⚡\n\n"
+                f"⚡ <b>Updated Framerate Mode to {new_fps} FPS!</b>\n\n"
+                f"Current Active Stream Target:\n"
+                f"• <b>Target Quality:</b> <code>{q}</code>\n"
+                f"• <b>Framerate Mode:</b> <code>{new_fps} FPS</code>\n\n"
+                f"<i>Select your preferred resolution or framerate below:</i>"
+            )
+            markup = get_quality_menu_markup(current_q=q, current_fps=new_fps)
+            try:
+                await query.message.edit_text(text, reply_markup=markup)
+            except Exception as e:
+                print(f"[Admin] set_fps edit note: {e}")
+
+
+
+        elif data == "admin_live_streams":
+            await query.answer("Loading Active Live Streams...")
+            from core.player import player_manager
+            active_chats = list(player_manager.active_calls) if player_manager else []
+            
+            if not active_chats:
+                text_content = (
+                    f"{ROYAL_HEADER}"
+                    f"🔴 <b>ACTIVE LIVE STREAMS (0)</b>\n\n"
+                    f"⚠️ <i>Currently, there are NO active music or video streams running in any group.</i>"
+                )
+                buttons = [[InlineKeyboardButton("🔙 BACK", callback_data="admin_back", style="primary")]]
+            else:
+                lines = []
+                buttons = []
+                for idx, c_id in enumerate(active_chats, start=1):
+                    group_title = f"Group {c_id}"
+                    try:
+                        chat_obj = await client.get_chat(c_id)
+                        if chat_obj and chat_obj.title:
+                            group_title = chat_obj.title
+                    except Exception:
+                        pass
+                    
+                    song_title = player_manager.stream_title.get(c_id, "Unknown Track")
+                    start_time = player_manager.stream_start_time.get(c_id, time.time())
+                    elapsed = max(0, int(time.time() - start_time))
+                    tot_dur = player_manager.stream_duration.get(c_id, 0)
+                    
+                    elapsed_str = player_manager._fmt_time(elapsed)
+                    tot_str = player_manager._fmt_time(tot_dur) if tot_dur else "Live"
+                    
+                    local_p = player_manager.active_files.get(c_id, "")
+                    mode_str = "🎥 Video (720p 60fps)" if (local_p.endswith(".mp4") or local_p.endswith(".mkv")) else "🎧 Audio (Studio HQ)"
+                    
+                    lines.append(
+                        f"<b>{idx}. {group_title}</b> [<code>{c_id}</code>]\n"
+                        f"   📌 <b>Song:</b> <code>{song_title[:35]}</code>\n"
+                        f"   {mode_str}\n"
+                        f"   ⏱ <b>Progress:</b> <code>{elapsed_str} / {tot_str}</code>\n"
+                    )
+                    buttons.append([InlineKeyboardButton(f"⏹ Force Stop: {group_title[:20]}", callback_data=f"admin_stop_stream|{c_id}")])
+                
+                text_content = (
+                    f"{ROYAL_HEADER}"
+                    f"🔴 <b>ACTIVE LIVE STREAMS ({len(active_chats)}):</b>\n\n" +
+                    "\n".join(lines) +
+                    f"\n💡 <i>Tap any button below to force stop playback in that specific group.</i>"
+                )
+                buttons.append([InlineKeyboardButton("🔄 REFRESH LIST", callback_data="admin_live_streams", style="success")])
+                buttons.append([InlineKeyboardButton("🔙 BACK", callback_data="admin_back", style="primary")])
+
             from bot import send_styled
             await send_styled(
                 chat_id=chat_id,
-                text=(
-                    f"{ROYAL_HEADER}"
-                    f"Welcome to the bot control dashboard, Owner.\n\n"
-                    f"💻 <b>System Status:</b>\n"
-                    f"• CPU Usage: <code>{cpu_usage}%</code>\n"
-                    f"• RAM Usage: <code>{ram_usage}%</code>\n\n"
-                    f"ℹ️ <b>Quick Guide:</b>\n"
-                    f"• <b>BROADCAST</b>: Send announcement to all groups.\n"
-                    f"• <b>BC GROUPS</b>: Toggle group broadcast targets.\n"
-                    f"• <b>WELCOME SETTINGS</b>: Toggle welcome message cards.\n"
-                    f"• <b>BOT STATUS</b>: Toggle bot playback functionality per group.\n\n"
-                    f"Select an operation below:"
-                ),
-                markup=get_admin_panel_markup(),
+                text=text_content,
+                markup=InlineKeyboardMarkup(buttons),
                 message_id=query.message.id
             )
 
-        elif data == "admin_cookies_manager":
-            await query.answer("Loading Cookies Manager...")
-            status_text = get_cookies_status()
-            markup = get_cookies_manager_markup()
+        elif data.startswith("admin_stop_stream|"):
+            target_chat_id = int(data.split("|")[1])
+            await query.answer(f"Force stopping stream in {target_chat_id}...")
+            from core.player import player_manager
+            await player_manager.stop(target_chat_id)
+            
+            active_chats = list(player_manager.active_calls) if player_manager else []
+            if not active_chats:
+                text_content = (
+                    f"{ROYAL_HEADER}"
+                    f"🔴 <b>ACTIVE LIVE STREAMS (0)</b>\n\n"
+                    f"✅ <i>Stream stopped! Currently no active streams running in any group.</i>"
+                )
+                buttons = [[InlineKeyboardButton("🔙 BACK", callback_data="admin_back", style="primary")]]
+            else:
+                lines = []
+                buttons = []
+                for idx, c_id in enumerate(active_chats, start=1):
+                    g_title = f"Group {c_id}"
+                    try:
+                        chat_obj = await client.get_chat(c_id)
+                        if chat_obj and chat_obj.title:
+                            g_title = chat_obj.title
+                    except Exception:
+                        pass
+                    
+                    s_title = player_manager.stream_title.get(c_id, "Unknown Track")
+                    st_time = player_manager.stream_start_time.get(c_id, time.time())
+                    el = max(0, int(time.time() - st_time))
+                    tot_d = player_manager.stream_duration.get(c_id, 0)
+                    
+                    lines.append(
+                        f"<b>{idx}. {g_title}</b> [<code>{c_id}</code>]\n"
+                        f"   📌 <b>Song:</b> <code>{s_title[:35]}</code>\n"
+                        f"   ⏱ <b>Progress:</b> <code>{player_manager._fmt_time(el)} / {player_manager._fmt_time(tot_d) if tot_d else 'Live'}</code>\n"
+                    )
+                    buttons.append([InlineKeyboardButton(f"⏹ Force Stop: {g_title[:20]}", callback_data=f"admin_stop_stream|{c_id}")])
+                
+                text_content = (
+                    f"{ROYAL_HEADER}"
+                    f"🔴 <b>ACTIVE LIVE STREAMS ({len(active_chats)}):</b>\n\n" +
+                    "\n".join(lines)
+                )
+                buttons.append([InlineKeyboardButton("🔄 REFRESH LIST", callback_data="admin_live_streams", style="success")])
+                buttons.append([InlineKeyboardButton("🔙 BACK", callback_data="admin_back", style="primary")])
+
+            from bot import send_styled
+            await send_styled(
+                chat_id=chat_id,
+                text=text_content,
+                markup=InlineKeyboardMarkup(buttons),
+                message_id=query.message.id
+            )
+
+        elif data.startswith("admin_approved_groups"):
+            await query.answer("Loading Approved Control Users...")
+            from core.db import get_approved_users
+            ausers = get_approved_users()
+            
+            lines = []
+            buttons_list = []
+            for i, u in enumerate(ausers, start=1):
+                gid = u["chat_id"]
+                uid = u["user_id"]
+                uname = u["user_name"] or f"User {uid}"
+                by_id = u.get("approved_by", 0)
+                t_str = datetime.datetime.fromtimestamp(u.get("added_at", time.time())).strftime("%d %b %Y, %I:%M %p")
+                lines.append(
+                    f"<b>{i}.</b> <a href=\"tg://user?id={uid}\">{uname}</a> [<code>{uid}</code>] (Group: <code>{gid}</code>)\n"
+                    f"   📅 <i>Approved On: {t_str}</i>\n"
+                    f"   👑 <i>Approved By: <code>{by_id}</code></i>\n"
+                )
+                buttons_list.append([InlineKeyboardButton(f"❌ Revoke ({gid}): {uname[:14]}", callback_data=f"unapprove_user|{gid}|{uid}")])
+
+            if not lines:
+                text_content = (
+                    f"{ROYAL_HEADER}👥 <b>No Approved Control Users!</b>\n\n"
+                    f"Aap kisi group me user ke message par reply karke <code>/approvecontrol</code> (ya <code>/aprovedcontroll</code>) chalayein."
+                )
+            else:
+                text_content = (
+                    f"{ROYAL_HEADER}👥 <b>ALL APPROVED CONTROL USERS ({len(lines)}):</b>\n\n" +
+                    "\n".join(lines)
+                )
+
+            buttons_list.append([InlineKeyboardButton("🔙 BACK", callback_data="admin_back", style="primary")])
+            from bot import send_styled
+            await send_styled(
+                chat_id=chat_id,
+                text=text_content,
+                markup=InlineKeyboardMarkup(buttons_list),
+                message_id=query.message.id
+            )
+
+        elif data == "admin_reload_bot":
+            await query.answer("🔄 Reloading Bot Process...")
             from bot import send_styled
             await send_styled(
                 chat_id=chat_id,
                 text=(
                     f"{ROYAL_HEADER}"
-                    f"🍪 <b>YouTube Cookies Manager</b>\n\n"
-                    f"{status_text}\n\n"
-                    f"💡 <b>How to update/upload cookies:</b>\n"
-                    f"Simply send or forward a Netscape-format <code>.txt</code> file containing the word 'cookies' (e.g. <code>cookies.txt</code>) to this chat.\n\n"
-                    f"The bot will automatically validate, delete old cookies, and replace them instantly."
+                    f"🔄 <b>RELOADING BOT PROCESS...</b>\n\n"
+                    f"⚡ <i>Stopping active streams &amp; refreshing process terminal... Please wait a few seconds!</i>"
                 ),
-                markup=markup,
                 message_id=query.message.id
             )
+            from core.player import player_manager
+            try:
+                await player_manager.close()
+            except Exception:
+                pass
+            import sys
+            import os
+            print("[System] Admin initiated process reload...")
+            os._exit(0)
 
         elif data == "admin_cookies_delete":
             path = Config.COOKIES_FILE
@@ -811,7 +937,7 @@ def register(app: Client):
 
         elif data.startswith("admin_groups|"):
             page = int(data.split("|")[1])
-            groups = get_broadcast_groups()
+            groups = await sync_groups_from_telegram(client)
             
             if not groups:
                 await query.answer("⚠️ No groups registered in database yet!", show_alert=True)
@@ -856,7 +982,7 @@ def register(app: Client):
 
         elif data.startswith("admin_welcome_groups|"):
             page = int(data.split("|")[1])
-            groups = get_broadcast_groups()
+            groups = await sync_groups_from_telegram(client)
             
             if not groups:
                 await query.answer("⚠️ No groups registered in database yet!", show_alert=True)
@@ -904,7 +1030,7 @@ def register(app: Client):
 
         elif data.startswith("admin_status_groups|"):
             page = int(data.split("|")[1])
-            groups = get_broadcast_groups()
+            groups = await sync_groups_from_telegram(client)
             
             if not groups:
                 await query.answer("⚠️ No groups registered in database yet!", show_alert=True)
@@ -1308,7 +1434,12 @@ def register(app: Client):
                     await target_msg.copy(chat_id=group["chat_id"])
                     success += 1
                 except Exception as copy_err:
+                    err_str = str(copy_err)
                     print(f"[Admin] Broadcast failed for group {group['chat_id']}: {copy_err}")
+                    if any(k in err_str for k in ["CHANNEL_INVALID", "PEER_ID_INVALID", "CHAT_ID_INVALID", "USER_NOT_PARTICIPANT", "CHAT_ADMIN_REQUIRED", "INPUT_USER_DEACTIVATED", "Chat not found"]):
+                        from core.db import remove_group_info
+                        remove_group_info(group['chat_id'])
+                        print(f"[Admin] Auto-purged dead group {group['chat_id']} from DB cache!")
                     failed += 1
                 await asyncio.sleep(0.15)
 

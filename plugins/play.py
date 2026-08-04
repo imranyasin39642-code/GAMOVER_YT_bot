@@ -4,11 +4,50 @@ from pyrogram import Client, filters, enums
 from pyrogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
 from config import Config
 from core.player import player_manager
-from core.db import is_sudo_user, add_started_user
+from core.db import is_sudo_user, add_started_user, update_group_info, is_group_bot_active
+from bot import make_card
 
-ROYAL_HEADER = "👑 <b>ɢᴀᴍᴇᴏᴠᴇʀ ʏᴛ sᴛʀᴇᴀᴍᴇʀ</b> 👑\n\n"
+ROYAL_HEADER = "👑 <b>ɢᴀṁᴇᴏᴠᴇʀ ʏᴛ sᴛʀᴇᴀṁᴇʀ</b> 👑\n\n"
+
+def build_effects_markup(selected_effect: str, chat_id: int, requested_by_id: int) -> InlineKeyboardMarkup:
+    effects_data = [
+        ("normal",    "🎵", "NORMAL"),
+        ("bassboost", "🔊", "BASS BOOST"),
+        ("nightcore", "⚡", "NIGHTCORE"),
+        ("slowed",    "🐢", "SLOWED"),
+        ("lofi",      "☕", "LOFI"),
+        ("8d",        "🎧", "8D"),
+        ("classic",   "🎼", "CLASSIC"),
+        ("jack",      "🎸", "JACK"),
+    ]
+
+    buttons = []
+    row = []
+    for key, icon, label in effects_data:
+        if key == selected_effect:
+            btn_text = f"✅ {icon} {label}"
+            btn_style = "success"
+        else:
+            btn_text = f"❌ {icon} {label}"
+            btn_style = "danger"
+        row.append(InlineKeyboardButton(btn_text, callback_data=f"fx_set|{key}|{chat_id}|{requested_by_id}", style=btn_style))
+        if len(row) == 2:
+            buttons.append(row)
+            row = []
+
+    if row:
+        buttons.append(row)
+
+    buttons.append([InlineKeyboardButton("BACK", callback_data=f"fx_back|{chat_id}|{requested_by_id}", style="primary")])
+    return InlineKeyboardMarkup(buttons)
 
 def register(app: Client):
+
+    @app.on_message(filters.group, group=-1)
+    async def auto_register_group(client: Client, message: Message):
+        if message.chat and message.chat.id:
+            title = message.chat.title or "Group Chat"
+            update_group_info(message.chat.id, title)
 
     @app.on_message(filters.command("start"))
     async def start_command(client: Client, message: Message):
@@ -23,7 +62,8 @@ def register(app: Client):
                 first_name=message.from_user.first_name or ""
             )
         
-        welcome_text = (
+        from bot import make_card
+        welcome_text = make_card(
             f"👑 <b>ɢᴀᴍᴇᴏᴠᴇʀ ʏᴛ sᴛʀᴇᴀᴍᴇʀ</b> 👑\n\n"
             f"🔥 <b>WELCOME, {user_name.upper()}!</b> 🔥\n\n"
             f"I AM 🎬 <b>GameOver YT Streamer</b>, A PREMIUM HIGH-PERFORMANCE YOUTUBE VIDEO AND AUDIO STREAMING BOT.\n\n"
@@ -62,17 +102,21 @@ def register(app: Client):
     @app.on_message(filters.command(["vd", "video"]) & filters.group)
     async def play_command(client: Client, message: Message):
         chat_id = message.chat.id
+        if not is_group_bot_active(chat_id):
+            return
         if len(message.command) < 2:
             await message.reply_text(
-                f"{ROYAL_HEADER}❌ <b>Song name ya YouTube link dein!</b>\n"
-                f"Examples:\n"
-                f"• <code>/vd blue eyes</code>\n"
-                f"• <code>/vd https://youtu.be/B-99Pm--78Y</code>"
+                make_card(
+                    f"{ROYAL_HEADER}❌ <b>Please specify a track name or YouTube URL!</b>\n\n"
+                    f"👉 <b>Click to Copy Examples:</b>\n"
+                    f"• <code>/vd blue eyes</code>\n"
+                    f"• <code>/vd https://youtu.be/B-99Pm--78Y</code>"
+                )
             )
             return
 
         query = " ".join(message.command[1:])
-        status_msg = await message.reply_text(f"{ROYAL_HEADER}⏳ <b>Processing... Please wait!</b>")
+        status_msg = await message.reply_text(make_card(f"{ROYAL_HEADER}⏳ <b>Processing... Please wait!</b>"))
         
         req_name = message.from_user.first_name if message.from_user else "User"
         req_id = message.from_user.id if message.from_user else 0
@@ -82,62 +126,256 @@ def register(app: Client):
     @app.on_message(filters.command(["audio", "ad"]) & filters.group)
     async def audio_command(client: Client, message: Message):
         chat_id = message.chat.id
+        if not is_group_bot_active(chat_id):
+            return
         if len(message.command) < 2:
             await message.reply_text(
-                f"{ROYAL_HEADER}❌ <b>Song name ya YouTube link dein!</b>\n"
-                f"Examples:\n"
-                f"• <code>/ad blue eyes</code>\n"
-                f"• <code>/ad https://youtu.be/B-99Pm--78Y</code>"
+                make_card(
+                    f"{ROYAL_HEADER}❌ <b>Please specify a track name or YouTube URL!</b>\n\n"
+                    f"👉 <b>Click to Copy Examples:</b>\n"
+                    f"• <code>/ad blue eyes</code>\n"
+                    f"• <code>/ad https://youtu.be/B-99Pm--78Y</code>"
+                )
             )
             return
 
         query = " ".join(message.command[1:])
-        status_msg = await message.reply_text(f"{ROYAL_HEADER}⏳ <b>Processing... Please wait!</b>")
+        status_msg = await message.reply_text(make_card(f"{ROYAL_HEADER}⏳ <b>Processing... Please wait!</b>"))
         
         req_name = message.from_user.first_name if message.from_user else "User"
         req_id = message.from_user.id if message.from_user else 0
         
         asyncio.create_task(player_manager.play(chat_id, query, mode="audio", status_msg=status_msg, requested_by=req_name, requested_by_id=req_id))
 
-    @app.on_message(filters.command(["skip", "next"]) & filters.group)
-    async def skip_command(client: Client, message: Message):
+    @app.on_message(filters.command(["playlist", "list"]) & filters.group)
+    async def playlist_command(client: Client, message: Message):
         chat_id = message.chat.id
-        user_id = message.from_user.id if message.from_user else 0
-        active_req_id = player_manager.active_requester_id.get(chat_id, 0)
-
-        # Check if anything is playing
-        if chat_id not in player_manager.active_calls:
-            await message.reply_text(f"{ROYAL_HEADER}⚠️ <b>Abhi kuch bhi play nahi ho raha!</b>")
+        if not is_group_bot_active(chat_id):
+            return
+        if len(message.command) < 2:
+            await message.reply_text(
+                make_card(
+                    f"{ROYAL_HEADER}❌ <b>YouTube playlist link dein!</b>\n\n"
+                    f"👉 <b>Click to Copy Example:</b>\n"
+                    f"• <code>/list https://www.youtube.com/playlist?list=RDMM</code>"
+                )
+            )
             return
 
-        # Permission check: requester / owner / sudo / group admin can skip
-        is_allowed = False
-        if user_id in (Config.OWNER_ID, active_req_id) or is_sudo_user(user_id):
-            is_allowed = True
+        query = message.command[1].strip()
+        status_msg = await message.reply_text(make_card(f"{ROYAL_HEADER}⏳ <b>Processing Playlist... Please wait!</b>"))
+        
+        req_name = message.from_user.first_name if message.from_user else "User"
+        req_id = message.from_user.id if message.from_user else 0
+        
+        asyncio.create_task(player_manager.play(
+            chat_id=chat_id,
+            youtube_url=query,
+            mode="video",
+            status_msg=status_msg,
+            requested_by=req_name,
+            requested_by_id=req_id
+        ))
+
+    @app.on_message(filters.command(["playlistaudio", "listaudio", "la"]) & filters.group)
+    async def playlist_audio_command(client: Client, message: Message):
+        chat_id = message.chat.id
+        if not is_group_bot_active(chat_id):
+            return
+        if len(message.command) < 2:
+            await message.reply_text(
+                make_card(
+                    f"{ROYAL_HEADER}❌ <b>YouTube playlist link dein!</b>\n\n"
+                    f"👉 <b>Click to Copy Example:</b>\n"
+                    f"• <code>/la https://www.youtube.com/playlist?list=RDMM</code>"
+                )
+            )
+            return
+
+        query = message.command[1].strip()
+        status_msg = await message.reply_text(make_card(f"{ROYAL_HEADER}⏳ <b>Processing Audio Playlist... Please wait!</b>"))
+        
+        req_name = message.from_user.first_name if message.from_user else "User"
+        req_id = message.from_user.id if message.from_user else 0
+        
+        asyncio.create_task(player_manager.play(
+            chat_id=chat_id,
+            youtube_url=query,
+            mode="audio",
+            status_msg=status_msg,
+            requested_by=req_name,
+            requested_by_id=req_id
+        ))
+
+    @app.on_message(filters.command(["plresume", "playlistresume", "resumeplaylist"]) & filters.group)
+    async def pl_resume_command(client: Client, message: Message):
+        chat_id = message.chat.id
+        if not is_group_bot_active(chat_id):
+            return
+        
+        from core.db import get_playlist_state
+        state = get_playlist_state(chat_id, "video") or get_playlist_state(chat_id, "audio")
+        if not state or not state.get("playlist_id"):
+            await message.reply_text(make_card(f"{ROYAL_HEADER}⚠️ <b>Iss group me koi saved playlist state nahi mili!</b>\nPehle koi playlist play karein."))
+            return
+
+        pl_id = state["playlist_id"]
+        mode = state["mode"]
+        last_idx = state["last_index"]
+
+        status_msg = await message.reply_text(make_card(f"{ROYAL_HEADER}⏳ <b>Resuming Playlist from Song #{last_idx + 1}... Please wait!</b>"))
+
+        req_name = message.from_user.first_name if message.from_user else "User"
+        req_id = message.from_user.id if message.from_user else 0
+
+        playlist_url = f"https://www.youtube.com/playlist?list={pl_id}" if not pl_id.startswith("http") else pl_id
+
+        # Ensure pending_playlists is populated if bot was restarted
+        if chat_id not in player_manager.pending_playlists:
+            from core.scrapers import extract_youtube_playlist
+            entries = await extract_youtube_playlist(playlist_url)
+            if entries:
+                player_manager.pending_playlists[chat_id] = {
+                    "url": playlist_url,
+                    "pl_id": pl_id,
+                    "mode": mode,
+                    "entries": entries,
+                    "requested_by": req_name,
+                    "requested_by_id": req_id
+                }
+
+        if chat_id in player_manager.pending_playlists:
+            asyncio.create_task(player_manager.execute_playlist(
+                chat_id=chat_id,
+                start_from_index=last_idx,
+                mode=mode,
+                status_msg=status_msg
+            ))
         else:
             try:
-                member = await client.get_chat_member(chat_id, user_id)
-                if member.status in (enums.ChatMemberStatus.ADMINISTRATOR, enums.ChatMemberStatus.OWNER):
-                    is_allowed = True
+                await status_msg.edit_text(make_card("❌ <b>Unable to load playlist! Please provide a valid playlist link.</b>"))
             except Exception:
                 pass
 
-        if not is_allowed:
-            await message.reply_text("⚠️ Only the requester or an Admin can skip!")
+    @app.on_message(filters.command(["playlists", "myplaylists", "savedplaylists", "plhistory"]) & filters.group)
+    async def group_playlists_history_command(client: Client, message: Message):
+        chat_id = message.chat.id
+        if not is_group_bot_active(chat_id):
+            return
+        
+        from core.db import get_all_playlist_states
+        states = get_all_playlist_states(chat_id)
+        if not states:
+            await message.reply_text(make_card(
+                f"{ROYAL_HEADER}⚠️ <b>Iss group me koi saved playlists history nahi hai!</b>\n\n"
+                f"Pehle group me koi YouTube Playlist link play karein (e.g. <code>/list [URL]</code>)."
+            ))
             return
 
-        skipped = await player_manager.skip(chat_id)
-        if not skipped:
-            await message.reply_text(f"{ROYAL_HEADER}⏹ <b>Queue empty! Playback stopped.</b>")
+        lines = []
+        buttons = []
 
-    @app.on_message(filters.command("stop") & filters.group)
-    async def stop_command(client: Client, message: Message):
+        for idx, st in enumerate(states, start=1):
+            pl_id = st["playlist_id"]
+            mode_label = "🎥 Video" if st["mode"] == "video" else "🎧 Audio"
+            last_idx = st["last_index"]
+            tot = st["total_tracks"]
+            song_num = last_idx + 1 if last_idx is not None else 1
+            pl_title = st.get("title") or f"Playlist ID: {pl_id[:16]}..."
+
+            lines.append(
+                f"<b>{idx}. {pl_title}</b>\n"
+                f"   └ 📍 <b>Last Position:</b> Song #{song_num} of {tot} ({mode_label})"
+            )
+
+            buttons.append([
+                InlineKeyboardButton(
+                    f"▶ Resume #{idx}: Song #{song_num}",
+                    callback_data=f"pl_hist_res|{chat_id}|{pl_id}|{st['mode']}|{last_idx}",
+                    style="success"
+                ),
+                InlineKeyboardButton(
+                    f"🔄 Start Over",
+                    callback_data=f"pl_hist_res|{chat_id}|{pl_id}|{st['mode']}|0",
+                    style="primary"
+                )
+            ])
+
+        buttons.append([InlineKeyboardButton("🗑 Close", callback_data="play_close")])
+
+        card_text = (
+            f"👑 <b>ɢᴀṁᴇᴏᴠᴇʀ ʏᴛ sᴛʀᴇᴀṁᴇʀ</b> 👑\n\n"
+            f"📋 <b>SAVED PLAYLISTS HISTORY IN THIS GROUP:</b>\n\n"
+            + "\n\n".join(lines) +
+            f"\n\n⚡ <i>Niche diye gaye button par click karke apni manpasand playlist wahi song position se resume karein!</i>"
+        )
+
+        from bot import send_styled
+        await send_styled(
+            chat_id=chat_id,
+            text=card_text,
+            markup=InlineKeyboardMarkup(buttons)
+        )
+
+    @app.on_callback_query(filters.regex(r"^pl_hist_res\|"))
+    async def pl_history_resume_callback(client: Client, query: CallbackQuery):
+        chat_id = query.message.chat.id
+        parts = query.data.split("|")
+        # format: pl_hist_res|chat_id|pl_id|mode|start_index
+        pl_id = parts[2]
+        mode = parts[3]
+        start_idx = int(parts[4])
+
+        await query.answer(f"▶ Resuming playlist from Song #{start_idx + 1}...")
+
+        req_name = query.from_user.first_name if query.from_user else "User"
+        req_id = query.from_user.id if query.from_user else 0
+        playlist_url = f"https://www.youtube.com/playlist?list={pl_id}" if not pl_id.startswith("http") else pl_id
+
+        from bot import edit_styled
+        await edit_styled(
+            chat_id=chat_id,
+            text=f"{ROYAL_HEADER}⏳ <b>Loading &amp; Resuming Playlist from Song #{start_idx + 1}... Please wait!</b>",
+            message_id=query.message.id
+        )
+
+        from core.scrapers import extract_youtube_playlist
+        entries = await extract_youtube_playlist(playlist_url)
+        if not entries:
+            await edit_styled(
+                chat_id=chat_id,
+                text=f"{ROYAL_HEADER}❌ <b>Playlist load nahi ho saki ya private hai!</b>",
+                message_id=query.message.id
+            )
+            return
+
+        player_manager.pending_playlists[chat_id] = {
+            "url": playlist_url,
+            "pl_id": pl_id,
+            "mode": mode,
+            "entries": entries,
+            "requested_by": req_name,
+            "requested_by_id": req_id
+        }
+
+        asyncio.create_task(player_manager.execute_playlist(
+            chat_id=chat_id,
+            start_from_index=start_idx,
+            mode=mode,
+            status_msg=query.message
+        ))
+
+    @app.on_message(filters.command("pause") & filters.group)
+    async def pause_command(client: Client, message: Message):
         chat_id = message.chat.id
+        if not is_group_bot_active(chat_id):
+            return
         user_id = message.from_user.id if message.from_user else 0
         active_req_id = player_manager.active_requester_id.get(chat_id, 0)
+        from core.db import is_user_approved
         
         is_allowed = False
-        if user_id in (Config.OWNER_ID, active_req_id) or is_sudo_user(user_id):
+        if user_id in (Config.OWNER_ID, active_req_id) or is_sudo_user(user_id) or is_user_approved(chat_id, user_id):
             is_allowed = True
         else:
             try:
@@ -148,11 +386,385 @@ def register(app: Client):
                 pass
                 
         if not is_allowed:
-            await message.reply_text("⚠️ Only the requester or an Admin can stop playback!")
+            await message.reply_text(make_card("⚠️ Only the requester, an Admin, or an Approved User can pause!"))
+            return
+
+        ok = await player_manager.pause(chat_id)
+        if ok:
+            await message.reply_text(make_card(f"{ROYAL_HEADER}⏸ <b>Playback Paused!</b>"))
+        else:
+            await message.reply_text(make_card(f"{ROYAL_HEADER}⚠️ <b>Abhi kuch bhi play nahi ho raha!</b>"))
+
+    @app.on_message(filters.command("resume") & filters.group)
+    async def resume_command(client: Client, message: Message):
+        chat_id = message.chat.id
+        if not is_group_bot_active(chat_id):
+            return
+        user_id = message.from_user.id if message.from_user else 0
+        active_req_id = player_manager.active_requester_id.get(chat_id, 0)
+        from core.db import is_user_approved
+        
+        is_allowed = False
+        if user_id in (Config.OWNER_ID, active_req_id) or is_sudo_user(user_id) or is_user_approved(chat_id, user_id):
+            is_allowed = True
+        else:
+            try:
+                member = await client.get_chat_member(chat_id, user_id)
+                if member.status in (enums.ChatMemberStatus.ADMINISTRATOR, enums.ChatMemberStatus.OWNER):
+                    is_allowed = True
+            except Exception:
+                pass
+                
+        if not is_allowed:
+            await message.reply_text(make_card("⚠️ Only the requester, an Admin, or an Approved User can resume!"))
+            return
+
+        ok = await player_manager.resume(chat_id)
+        if ok:
+            await message.reply_text(make_card(f"{ROYAL_HEADER}▶ <b>Playback Resumed!</b>"))
+        else:
+            await message.reply_text(make_card(f"{ROYAL_HEADER}⚠️ <b>Kuch bhi paused nahi hai!</b>"))
+
+    @app.on_message(filters.command(["skip", "next", "seek"]) & filters.group)
+    async def skip_command(client: Client, message: Message):
+        chat_id = message.chat.id
+        if not is_group_bot_active(chat_id):
+            return
+        user_id = message.from_user.id if message.from_user else 0
+        active_req_id = player_manager.active_requester_id.get(chat_id, 0)
+        from core.db import is_user_approved
+
+        if chat_id not in player_manager.active_calls:
+            await message.reply_text(make_card(f"{ROYAL_HEADER}⚠️ <b>Abhi kuch bhi play nahi ho raha!</b>"))
+            return
+
+        is_allowed = False
+        if user_id in (Config.OWNER_ID, active_req_id) or is_sudo_user(user_id) or is_user_approved(chat_id, user_id):
+            is_allowed = True
+        else:
+            try:
+                member = await client.get_chat_member(chat_id, user_id)
+                if member.status in (enums.ChatMemberStatus.ADMINISTRATOR, enums.ChatMemberStatus.OWNER):
+                    is_allowed = True
+            except Exception:
+                pass
+
+        if not is_allowed:
+            await message.reply_text(make_card("⚠️ Only the requester, an Admin, or an Approved User can skip/seek!"))
+            return
+
+        args = message.command[1:] if len(message.command) > 1 else []
+        cmd_name = message.command[0].lower()
+
+        if args or cmd_name == "seek":
+            if not args:
+                await message.reply_text(
+                    make_card(
+                        f"{ROYAL_HEADER}❌ <b>Time duration specify karein!</b>\n\n"
+                        f"👉 <b>Examples:</b>\n"
+                        f"• <code>/seek 10s</code>\n"
+                        f"• <code>/seek 1m</code>\n"
+                        f"• <code>/skip 30s</code>"
+                    )
+                )
+                return
+
+            def _parse_time(time_str: str) -> int:
+                import re
+                time_str = time_str.strip().lower()
+                if time_str.isdigit():
+                    return int(time_str)
+                total = 0
+                matches = re.findall(r'(\d+)\s*([smh])?', time_str)
+                for num_s, unit in matches:
+                    n = int(num_s)
+                    if unit == 'm':
+                        total += n * 60
+                    elif unit == 'h':
+                        total += n * 3600
+                    else:
+                        total += n
+                return total
+
+            secs = _parse_time(args[0])
+            if secs <= 0:
+                await message.reply_text(make_card("❌ Invalid time! E.g. <code>/seek 10s</code> or <code>/seek 1m</code>."))
+                return
+
+            user_name = message.from_user.first_name if message.from_user else "User"
+            user_link = f"<a href=\"tg://user?id={user_id}\">{user_name}</a>" if user_id > 0 else f"<b>{user_name}</b>"
+
+            ok = await player_manager.seek(chat_id, secs)
+            if ok:
+                from bot import send_styled
+                await send_styled(
+                    chat_id=chat_id,
+                    text=f"⏩ <b>Stream seeked forward by {secs}s by:</b> {user_link}"
+                )
+            else:
+                await message.reply_text(make_card("❌ Seek failed or offset exceeds stream length!"))
+            return
+
+        skipped = await player_manager.skip(chat_id)
+        if not skipped:
+            await message.reply_text(make_card(f"{ROYAL_HEADER}⏹ <b>Queue empty! Playback stopped.</b>"))
+
+    @app.on_message(filters.command("stop") & filters.group)
+    async def stop_command(client: Client, message: Message):
+        chat_id = message.chat.id
+        if not is_group_bot_active(chat_id):
+            return
+        user_id = message.from_user.id if message.from_user else 0
+        active_req_id = player_manager.active_requester_id.get(chat_id, 0)
+        from core.db import is_user_approved
+        
+        is_allowed = False
+        if user_id in (Config.OWNER_ID, active_req_id) or is_sudo_user(user_id) or is_user_approved(chat_id, user_id):
+            is_allowed = True
+        else:
+            try:
+                member = await client.get_chat_member(chat_id, user_id)
+                if member.status in (enums.ChatMemberStatus.ADMINISTRATOR, enums.ChatMemberStatus.OWNER):
+                    is_allowed = True
+            except Exception:
+                pass
+                
+        if not is_allowed:
+            await message.reply_text(make_card("⚠️ Only the requester, an Admin, or an Approved User can stop playback!"))
             return
             
+        user_name = message.from_user.first_name if message.from_user else "User"
+        user_link = f"<a href=\"tg://user?id={user_id}\">{user_name}</a>" if user_id > 0 else f"<b>{user_name}</b>"
         await player_manager.stop(chat_id)
-        await message.reply_text(f"{ROYAL_HEADER}⏹ <b>Playback stopped!</b>")
+        await message.reply_text(
+            make_card(f"{ROYAL_HEADER}⏹ <b>ᴘʟᴀʏʙᴀᴄᴋ sᴛᴏᴘᴘᴇᴅ ʙʏ:</b> {user_link}")
+        )
+
+    # ── Owner-Only Approved Control Commands ────────────────────────────────
+    @app.on_message(filters.command(["approvecontrol", "approvedcontrol", "approvecontroll", "aprovedcontroll", "aprovedcontrol", "approve", "approved"]) & filters.group)
+    async def approve_control_command(client: Client, message: Message):
+        user_id = message.from_user.id if message.from_user else 0
+        if user_id != Config.OWNER_ID and not is_sudo_user(user_id):
+            await message.reply_text(make_card(f"{ROYAL_HEADER}⚠️ <b>Sirf Bot Owner / Sudo hi Approved Control grant kar sakta hai!</b>"))
+            return
+
+        target_user = None
+        if message.reply_to_message and message.reply_to_message.from_user:
+            target_user = message.reply_to_message.from_user
+        elif len(message.command) > 1:
+            query = message.command[1].strip()
+            try:
+                target_user = await client.get_users(query)
+            except Exception:
+                pass
+
+        if not target_user:
+            await message.reply_text(
+                make_card(
+                    f"{ROYAL_HEADER}❌ <b>Target User specify karein!</b>\n"
+                    f"Kisi user ke message par <b>reply</b> karke <code>/approvecontrol</code> chalayein ya <code>/approve @username</code> dein."
+                )
+            )
+            return
+
+        chat_id = message.chat.id
+        from core.db import add_approved_user
+        add_approved_user(chat_id, target_user.id, target_user.first_name, user_id)
+
+        target_link = f"<a href=\"tg://user?id={target_user.id}\">{target_user.first_name}</a>"
+        card = make_card(
+            f"👑 <b>ɢᴀṁᴇᴏᴠᴇʀ ʏᴛ sᴛʀᴇᴀṁᴇʀ</b> 👑\n\n"
+            f"✅ <b>CONTROL PERMISSION GRANTED!</b>\n\n"
+            f"👤 <b>User:</b> {target_link} [<code>{target_user.id}</code>]\n"
+            f"⚡ <i>Ab aap is group me buttons (▷, II, ➕, ▢) aur commands (/pause, /resume, /skip, /stop) control kar sakte hain!</i>"
+        )
+        await message.reply_text(card)
+
+    @app.on_message(filters.command(["unapprovecontrol", "unapprovedcontrol", "unapprovecontroll", "unaprovedcontroll", "unaprovedcontrol", "unapprove", "unapproved"]) & filters.group)
+    async def unapprove_control_command(client: Client, message: Message):
+        user_id = message.from_user.id if message.from_user else 0
+        if user_id != Config.OWNER_ID and not is_sudo_user(user_id):
+            await message.reply_text(make_card(f"{ROYAL_HEADER}⚠️ <b>Sirf Bot Owner / Sudo hi Approved Control revoke kar sakta hai!</b>"))
+            return
+
+        target_user = None
+        if message.reply_to_message and message.reply_to_message.from_user:
+            target_user = message.reply_to_message.from_user
+        elif len(message.command) > 1:
+            query = message.command[1].strip()
+            try:
+                target_user = await client.get_users(query)
+            except Exception:
+                pass
+
+        if not target_user:
+            await message.reply_text(
+                make_card(
+                    f"{ROYAL_HEADER}❌ <b>Target User specify karein!</b>\n"
+                    f"Kisi user ke message par <b>reply</b> karke <code>/unapprovecontrol</code> chalayein."
+                )
+            )
+            return
+
+        chat_id = message.chat.id
+        from core.db import remove_approved_user
+        remove_approved_user(chat_id, target_user.id)
+
+        target_link = f"<a href=\"tg://user?id={target_user.id}\">{target_user.first_name}</a>"
+        card = make_card(
+            f"👑 <b>ɢᴀṁᴇᴏᴠᴇʀ ʏᴛ sᴛʀᴇᴀṁᴇʀ</b> 👑\n\n"
+            f"❌ <b>CONTROL PERMISSION REVOKED!</b>\n\n"
+            f"👤 <b>User:</b> {target_link} [<code>{target_user.id}</code>]\n"
+            f"⚡ <i>Ab aap player controls use nahi kar sakte.</i>"
+        )
+        await message.reply_text(card)
+
+    @app.on_message(filters.command(["approvedusers", "approvelist"]) & filters.group)
+    async def approved_users_command(client: Client, message: Message):
+        chat_id = message.chat.id
+        from core.db import get_approved_users
+        import time
+        users = get_approved_users(chat_id)
+
+        if not users:
+            await message.reply_text(make_card(f"{ROYAL_HEADER}👥 <b>Iss group me koi approved control user nahi hai!</b>"))
+            return
+
+        import datetime
+        lines = []
+        buttons_list = []
+        for i, u in enumerate(users, start=1):
+            uid = u["user_id"]
+            uname = u["user_name"] or f"User {uid}"
+            by_id = u.get("approved_by", 0)
+            t_str = datetime.datetime.fromtimestamp(u.get("added_at", time.time())).strftime("%d %b %Y, %I:%M %p")
+            lines.append(
+                f"<b>{i}.</b> <a href=\"tg://user?id={uid}\">{uname}</a> [<code>{uid}</code>]\n"
+                f"   📅 <i>Approved On: {t_str}</i>\n"
+                f"   👑 <i>Approved By: <code>{by_id}</code></i>\n"
+            )
+            buttons_list.append([InlineKeyboardButton(f"❌ Revoke: {uname[:16]}", callback_data=f"unapprove_user|{chat_id}|{uid}")])
+
+        buttons_list.append([InlineKeyboardButton("🗑 Close", callback_data="play_close")])
+
+        users_text = (
+            f"👑 <b>ɢᴀṁᴇᴏᴠᴇʀ ʏᴛ sᴛʀᴇᴀṁᴇʀ</b> 👑\n\n"
+            f"👥 <b>TOTAL APPROVED CONTROL USERS:</b> <code>{len(users)}</code>\n\n" +
+            "\n".join(lines)
+        )
+        await message.reply_text(make_card(users_text), reply_markup=InlineKeyboardMarkup(buttons_list))
+
+    @app.on_message(filters.command("reset"))
+    async def reset_system_command(client: Client, message: Message):
+        user_id = message.from_user.id if message.from_user else 0
+        if user_id != Config.OWNER_ID and not is_sudo_user(user_id):
+            await message.reply_text(make_card(f"{ROYAL_HEADER}⚠️ <b>Sirf Bot Owner hi /reset command chala sakta hai!</b>"))
+            return
+
+        status_msg = await message.reply_text(make_card(f"{ROYAL_HEADER}⏳ <b>Executing Owner System Reset... Please wait!</b>"))
+
+        result = await player_manager.full_reset()
+
+        reset_card = make_card(
+            f"👑 <b>ɢᴀᴍᴇᴏᴠᴇʀ ʏᴛ sᴛʀᴇᴀᴍᴇʀ</b> 👑\n\n"
+            f"✅ <b>SYSTEM RESET COMPLETE!</b>\n\n"
+            f"📦 <b>Deleted Downloaded Files:</b> <code>{result['deleted_files']} files</code>\n"
+            f"🛑 <b>Stopped Active Calls:</b> <code>{result['stopped_calls']} calls</code>\n"
+            f"🧹 <b>Database &amp; Playlist States:</b> <code>Wiped Clean</code>\n\n"
+            f"⚡ <i>All downloaded videos/audios, queues, and playlist states have been fully reset!</i>"
+        )
+        try:
+            await status_msg.edit_text(reset_card)
+        except Exception:
+            await message.reply_text(reset_card)
+
+    @app.on_message(filters.command(["reload", "restart", "reloadbot"]))
+    async def reload_system_command(client: Client, message: Message):
+        user_id = message.from_user.id if message.from_user else 0
+        if user_id != Config.OWNER_ID and not is_sudo_user(user_id):
+            await message.reply_text(make_card(f"{ROYAL_HEADER}⚠️ <b>Sirf Bot Owner hi /reload command chala sakta hai!</b>"))
+            return
+
+        status_msg = await message.reply_text(
+            make_card(
+                f"👑 <b>ɢᴀṁᴇᴏᴠᴇʀ ʏᴛ sᴛʀᴇᴀṁᴇʀ</b> 👑\n\n"
+                f"🔄 <b>RELOADING BOT PROCESS...</b>\n\n"
+                f"⚡ <i>Stopping active streams &amp; refreshing process terminal... Please wait a few seconds!</i>"
+            )
+        )
+
+        try:
+            await player_manager.close()
+        except Exception as e:
+            print(f"[Reload] Error closing calls: {e}")
+
+        import sys
+        import os
+        print("[System] Owner initiated process reload...")
+        os._exit(0)
+
+    @app.on_message(filters.command(["queue", "recent"]) & filters.group)
+    async def queue_command(client: Client, message: Message):
+        chat_id = message.chat.id
+        if not is_group_bot_active(chat_id):
+            return
+        
+        # Check if anything is playing
+        if chat_id not in player_manager.active_calls:
+            await message.reply_text(make_card(f"{ROYAL_HEADER}⚠️ <b>Abhi kuch bhi play nahi ho raha!</b>"))
+            return
+            
+        current_title = player_manager.stream_title.get(chat_id, "Unknown Title")
+        queued_songs = player_manager.queues.get(chat_id, [])
+        
+        text = f"{ROYAL_HEADER}🎵 <b>Now Playing:</b>\n• <code>{current_title}</code>\n\n"
+        
+        if queued_songs:
+            q_lines = []
+            for i, song in enumerate(queued_songs, start=1):
+                t = song['title']
+                t_short = (t[:32] + "...") if len(t) > 32 else t
+                q_lines.append(f"{i}. {t_short}")
+            q_str = "\n".join(q_lines)
+            text += f"📣 <b>Upcoming Queue:</b>\n<blockquote expandable>{q_str}</blockquote>"
+        else:
+            text += "📣 <b>Queue is empty!</b>"
+            
+        await message.reply_text(make_card(text))
+
+    @app.on_message(filters.command(["help", "helpmenu"]))
+    async def help_command(client: Client, message: Message):
+        bot_username = Config.BOT_USERNAME or (await client.get_me()).username
+        help_card = make_card(
+            f"👑 <b>ɢᴀᴍᴇᴏᴠᴇʀ ʏᴛ sᴛʀᴇᴀᴍᴇʀ</b> 👑\n"
+            f"📚 <b>HELP & COMMANDS GUIDE</b>\n\n"
+            f"🎬 <b>VIDEO PLAYBACK:</b>\n"
+            f"• <code>/vd</code> <i>[song/link]</i> - Stream Video (720p 60fps)\n"
+            f"• <code>/video</code> <i>[song/link]</i> - Stream Video\n\n"
+            f"🎵 <b>AUDIO PLAYBACK:</b>\n"
+            f"• <code>/ad</code> <i>[song/link]</i> - Stream HQ Studio Audio\n"
+            f"• <code>/audio</code> <i>[song/link]</i> - Stream Audio\n\n"
+            f"📹 <b>VIDEO PLAYLIST:</b>\n"
+            f"• <code>/list</code> <i>[playlist link]</i> - Play Video Playlist\n"
+            f"• <code>/playlist</code> <i>[playlist link]</i> - Play Video Playlist\n\n"
+            f"🎧 <b>AUDIO PLAYLIST:</b>\n"
+            f"• <code>/la</code> <i>[playlist link]</i> - Play Audio Playlist\n"
+            f"• <code>/listaudio</code> <i>[playlist link]</i> - Play Audio Playlist\n\n"
+            f"🔄 <b>PLAYLIST RESUME:</b>\n"
+            f"• <code>/plresume</code> - Resume saved playlist from last song\n"
+            f"• <code>/playlistresume</code> - Resume playlist progress\n\n"
+            f"🎮 <b>CONTROLS & QUEUE:</b>\n"
+            f"• <code>/pause</code> - Pause the active stream\n"
+            f"• <code>/resume</code> - Resume the paused stream\n"
+            f"• <code>/skip</code> - Skip to next queued track\n"
+            f"• <code>/stop</code> - Stop playback & leave voice chat\n"
+            f"• <code>/queue</code> - View upcoming queued tracks"
+        )
+        buttons = InlineKeyboardMarkup([
+            [InlineKeyboardButton("➕ ADD ME TO YOUR GROUP", url=f"https://t.me/{bot_username}?startgroup=true", style="success")],
+            [InlineKeyboardButton("🗑 CLOSE", callback_data="play_close", style="danger")]
+        ])
+        await message.reply_text(help_card, reply_markup=buttons)
 
     @app.on_callback_query(filters.regex(r"^play_"))
     async def player_callbacks(client: Client, query: CallbackQuery):
@@ -162,9 +774,12 @@ def register(app: Client):
         def _perm_check(user_id, chat_id, requested_by_id):
             if user_id in (Config.OWNER_ID, requested_by_id) or is_sudo_user(user_id):
                 return True
-            return False  # async admin check done inline below
+            from core.db import is_user_approved
+            if is_user_approved(chat_id, user_id):
+                return True
+            return False
 
-        if action in ("play_stop", "play_skip", "play_pause", "play_resume"):
+        if action in ("play_stop", "play_skip", "play_pause", "play_resume", "play_loop", "play_delete"):
             chat_id = int(data[1])
             requested_by_id = int(data[2]) if len(data) > 2 else 0
             user_id = query.from_user.id if query.from_user else 0
@@ -182,35 +797,77 @@ def register(app: Client):
                 await query.answer("⚠️ Only the requester or an Admin can control playback!", show_alert=True)
                 return
 
+            user_name = query.from_user.first_name if query.from_user else "User"
+            user_link = f"<a href=\"tg://user?id={user_id}\">{user_name}</a>" if user_id > 0 else f"<b>{user_name}</b>"
+            from bot import send_styled
+
             if action == "play_stop":
                 await player_manager.stop(chat_id)
                 try:
                     await query.message.delete()
                 except Exception:
                     pass
-                await query.answer("⏹ Stopped!")
+                await send_styled(
+                    chat_id=chat_id,
+                    text=f"⏹ <b>Stream stopped by:</b> {user_link}"
+                )
+                await query.answer("⏹ Stream Stopped!")
             elif action == "play_skip":
-                await query.answer("⏭ Skipping...")
+                await query.answer("⏭ Skipping track...")
                 skipped = await player_manager.skip(chat_id)
-                if not skipped:
-                    try:
-                        await query.message.delete()
-                    except Exception:
-                        pass
+                await send_styled(
+                    chat_id=chat_id,
+                    text=f"⏭ <b>Track skipped by:</b> {user_link}"
+                )
             elif action == "play_pause":
                 ok = await player_manager.pause(chat_id)
                 if ok:
-                    await query.answer("⏸ Paused!")
+                    await send_styled(
+                        chat_id=chat_id,
+                        text=f"⏸ <b>Stream paused by:</b> {user_link}"
+                    )
+                    await query.answer("⏸ Stream Paused!")
                 else:
-                    await query.answer("❌ Stream not active or cannot pause!", show_alert=True)
+                    await query.answer("❌ Stream is not active or cannot be paused!", show_alert=True)
             elif action == "play_resume":
                 ok = await player_manager.resume(chat_id)
                 if ok:
-                    await query.answer("▶ Resumed!")
+                    await send_styled(
+                        chat_id=chat_id,
+                        text=f"▶ <b>Stream resumed by:</b> {user_link}"
+                    )
+                    await query.answer("▶ Stream Resumed!")
                 else:
-                    await query.answer("❌ Stream not active or cannot resume!", show_alert=True)
+                    await query.answer("❌ Stream is not active or cannot be resumed!", show_alert=True)
+            elif action == "play_loop":
+                await query.answer("🔁 Loop Toggled!")
+                await send_styled(
+                    chat_id=chat_id,
+                    text=f"🔁 <b>Loop toggled by:</b> {user_link}"
+                )
+            elif action == "play_delete":
+                await query.answer("🗑 Deleting song card...")
+                try:
+                    await query.message.delete()
+                except Exception:
+                    pass
+
+        elif action == "play_effects":
+            chat_id = int(data[1]) if len(data) > 1 else query.message.chat.id
+            requested_by_id = int(data[2]) if len(data) > 2 else 0
+            player_manager.in_effects_menu.add(chat_id)
+            await query.answer("🎛 Opening Effects Menu...")
+            effects_markup = build_effects_markup("normal", chat_id, requested_by_id)
+            try:
+                from bot import edit_reply_markup_styled
+                await edit_reply_markup_styled(chat_id, query.message.id, effects_markup)
+            except Exception:
+                pass
 
         elif action == "play_close":
+            chat_id = query.message.chat.id if query.message and query.message.chat else 0
+            if chat_id:
+                player_manager.in_effects_menu.discard(chat_id)
             try:
                 await query.message.delete()
             except Exception:
@@ -219,6 +876,147 @@ def register(app: Client):
                 await query.answer()
             except Exception:
                 pass
+
+    @app.on_callback_query(filters.regex(r"^fx_"))
+    async def effects_callbacks(client: Client, query: CallbackQuery):
+        data = query.data.split("|")
+        action = data[0]
+
+        if action == "fx_back":
+            chat_id = int(data[1]) if len(data) > 1 else query.message.chat.id
+            requested_by_id = int(data[2]) if len(data) > 2 else 0
+            player_manager.in_effects_menu.discard(chat_id)
+            await query.answer("Back to Player")
+            local_path = player_manager.active_files.get(chat_id, "")
+            mode = "audio" if not (local_path.endswith(".mp4") or local_path.endswith(".mkv")) else "video"
+            import time
+            start = player_manager.stream_start_time.get(chat_id, time.time())
+            total = player_manager.stream_duration.get(chat_id, 0)
+            elapsed = int(time.time() - start)
+            try:
+                from bot import edit_reply_markup_styled
+                markup = player_manager._build_play_card_markup(chat_id, requested_by_id, elapsed, total, mode)
+                await edit_reply_markup_styled(chat_id, query.message.id, markup)
+            except Exception:
+                pass
+
+        elif action == "fx_set":
+            effect = data[1] if len(data) > 1 else "normal"
+            chat_id = int(data[2]) if len(data) > 2 else query.message.chat.id
+            requested_by_id = int(data[3]) if len(data) > 3 else 0
+            
+            # Apply real-time FFmpeg audio filter on PyTgCalls stream!
+            await player_manager.set_audio_effect(chat_id, effect)
+
+            await query.answer(f"🎛 Effect: {effect.upper()} Applied!")
+            effects_markup = build_effects_markup(effect, chat_id, requested_by_id)
+            try:
+                from bot import edit_reply_markup_styled
+                await edit_reply_markup_styled(chat_id, query.message.id, effects_markup)
+            except Exception:
+                pass
+
+    @app.on_callback_query(filters.regex(r"^unapprove_user\|"))
+    async def unapprove_user_callback(client: Client, query: CallbackQuery):
+        user_id = query.from_user.id if query.from_user else 0
+        if user_id != Config.OWNER_ID and not is_sudo_user(user_id):
+            await query.answer("⚠️ Only Bot Owner / Sudo can revoke approved users!", show_alert=True)
+            return
+
+        parts = query.data.split("|")
+        chat_id = int(parts[1])
+        target_uid = int(parts[2])
+
+        from core.db import remove_approved_user, get_approved_users
+        remove_approved_user(chat_id, target_uid)
+        await query.answer("❌ Permission Revoked!")
+
+        users = get_approved_users(chat_id)
+        if not users:
+            try:
+                await query.message.edit_text(make_card(f"{ROYAL_HEADER}👥 <b>Iss group me ab koi approved control user nahi hai!</b>"))
+            except Exception:
+                pass
+            return
+
+        lines = []
+        buttons_list = []
+        for u in users:
+            uid = u["user_id"]
+            uname = u["user_name"] or f"User {uid}"
+            lines.append(f"• <a href=\"tg://user?id={uid}\">{uname}</a> [<code>{uid}</code>]")
+            buttons_list.append([InlineKeyboardButton(f"❌ Revoke: {uname}", callback_data=f"unapprove_user|{chat_id}|{uid}")])
+
+        buttons_list.append([InlineKeyboardButton("🗑 Close", callback_data="play_close")])
+
+        users_text = (
+            f"👑 <b>ɢᴀṁᴇᴏᴠᴇʀ ʏᴛ sᴛʀᴇᴀṁᴇʀ</b> 👑\n\n"
+            f"👥 <b>APPROVED CONTROL USERS ({len(users)}):</b>\n\n" +
+            "\n".join(lines)
+        )
+        try:
+            await query.message.edit_text(make_card(users_text), reply_markup=InlineKeyboardMarkup(buttons_list))
+        except Exception:
+            pass
+
+    @app.on_callback_query(filters.regex(r"^pl_do_"))
+    async def playlist_resume_callbacks(client: Client, query: CallbackQuery):
+        data = query.data.split("|")
+        action = data[0]
+        pl_id = data[1]
+        mode = data[2]
+        chat_id = query.message.chat.id
+
+        req_name = query.from_user.first_name if query.from_user else "User"
+        req_id = query.from_user.id if query.from_user else 0
+
+        playlist_url = f"https://www.youtube.com/playlist?list={pl_id}" if not pl_id.startswith("http") else pl_id
+
+        if action == "pl_do_start":
+            start_idx = int(data[3]) if len(data) > 3 else 0
+            await query.answer("▶ Starting Playlist...")
+            try:
+                await query.message.edit_text(make_card(f"{ROYAL_HEADER}⏳ <b>Starting Playlist... Please wait!</b>"))
+            except Exception:
+                pass
+
+            asyncio.create_task(player_manager.execute_playlist(
+                chat_id=chat_id,
+                start_from_index=start_idx,
+                mode=mode,
+                status_msg=query.message
+            ))
+        elif action == "pl_do_resume":
+            start_idx = int(data[3]) if len(data) > 3 else 0
+            await query.answer(f"🟢 Resuming from track #{start_idx + 1}...")
+            
+            try:
+                await query.message.edit_text(make_card(f"{ROYAL_HEADER}⏳ <b>Resuming Playlist from Song #{start_idx + 1}... Please wait!</b>"))
+            except Exception:
+                pass
+
+            asyncio.create_task(player_manager.execute_playlist(
+                chat_id=chat_id,
+                start_from_index=start_idx,
+                mode=mode,
+                status_msg=query.message
+            ))
+        elif action == "pl_do_restart":
+            from core.db import clear_playlist_state
+            clear_playlist_state(chat_id, mode)
+            await query.answer("🔴 Starting Over from Song #1...")
+
+            try:
+                await query.message.edit_text(make_card(f"{ROYAL_HEADER}⏳ <b>Starting Playlist from Song #1... Please wait!</b>"))
+            except Exception:
+                pass
+
+            asyncio.create_task(player_manager.execute_playlist(
+                chat_id=chat_id,
+                start_from_index=0,
+                mode=mode,
+                status_msg=query.message
+            ))
 
     @app.on_callback_query(filters.regex(r"^welcome_"))
     async def welcome_callbacks(client: Client, query: CallbackQuery):
@@ -233,18 +1031,35 @@ def register(app: Client):
         
         if data == "welcome_help":
             help_text = (
-                f"👑 <b>ɢᴀᴍᴇᴏᴠᴇʀ ʏᴛ sᴛʀᴇᴀᴍᴇʀ</b> 👑\n\n"
-                f"📚 <b>HELP & COMMANDS MENU</b>\n\n"
-                f"Aap in commands ke zariye voice chat mein high-quality stream kar sakte hain:\n\n"
-                f"🎬 <b>Video Stream:</b>\n"
-                f"• <code>/vd [YouTube Link/Search Query]</code>\n"
-                f"• <code>/video [YouTube Link/Search Query]</code>\n\n"
-                f"🎵 <b>Audio Stream:</b>\n"
-                f"• <code>/ad [YouTube Link/Search Query]</code>\n"
-                f"• <code>/audio [YouTube Link/Search Query]</code>\n\n"
-                f"⏹ <b>Controls:</b>\n"
-                f"• <code>/stop</code> - Stop playback and leave voice chat.\n"
-                f"• <code>/admin</code> - Open interactive admin control panel."
+                f"👑 <b>ɢᴀᴍᴇᴏᴠᴇʀ ʏᴛ sᴛʀᴇᴀᴍᴇʀ</b> 👑\n"
+                f"📚 <b>HELP & COMMANDS GUIDE</b>\n\n"
+                f"🎬 <b>VIDEO PLAYBACK:</b>\n"
+                f"• <code>/vd</code> <i>[song/link]</i> - Stream Video (720p 60fps)\n"
+                f"• <code>/video</code> <i>[song/link]</i> - Stream Video\n\n"
+                f"🎵 <b>AUDIO PLAYBACK:</b>\n"
+                f"• <code>/ad</code> <i>[song/link]</i> - Stream HQ Studio Audio\n"
+                f"• <code>/audio</code> <i>[song/link]</i> - Stream Audio\n\n"
+                f"📹 <b>VIDEO PLAYLIST:</b>\n"
+                f"• <code>/list</code> <i>[playlist link]</i> - Play Video Playlist\n"
+                f"• <code>/playlist</code> <i>[playlist link]</i> - Play Video Playlist\n\n"
+                f"🎧 <b>AUDIO PLAYLIST:</b>\n"
+                f"• <code>/la</code> <i>[playlist link]</i> - Play Audio Playlist\n"
+                f"• <code>/listaudio</code> <i>[playlist link]</i> - Play Audio Playlist\n\n"
+                f"🔄 <b>PLAYLIST RESUME:</b>\n"
+                f"• <code>/plresume</code> - Resume saved playlist from last song\n"
+                f"• <code>/playlistresume</code> - Resume playlist progress\n\n"
+                f"🎮 <b>CONTROLS & QUEUE:</b>\n"
+                f"• <code>/pause</code> - Pause the active stream\n"
+                f"• <code>/resume</code> - Resume the paused stream\n"
+                f"• <code>/skip</code> - Skip to next queued track\n"
+                f"• <code>/skip 10s</code> / <code>/seek 1m</code> - Seek current stream forward\n"
+                f"• <code>/stop</code> - Stop playback & leave voice chat\n"
+                f"• <code>/queue</code> - View upcoming queued tracks\n\n"
+                f"⚙️ <b>ADMIN COMMANDS:</b>\n"
+                f"• <code>/welcome on</code> - Enable welcome card in group\n"
+                f"• <code>/welcome off</code> - Disable welcome card in group\n"
+                f"• <code>/start on</code> - Enable start intro card in group\n"
+                f"• <code>/start off</code> - Disable start intro card in group"
             )
             markup = InlineKeyboardMarkup([[
                 InlineKeyboardButton("🔙 BACK", callback_data="welcome_back", style="primary")
