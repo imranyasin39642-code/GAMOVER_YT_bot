@@ -150,6 +150,40 @@ def get_media_duration(file_path: str) -> int:
         pass
     return 0
 
+
+def ensure_audio_track(file_path: str) -> str:
+    """Check if media file has an audio stream via ffprobe. If missing, merge AAC audio track via ffmpeg."""
+    if not file_path or not os.path.exists(file_path):
+        return file_path
+    try:
+        import subprocess, json
+        cmd = [
+            "ffprobe", "-v", "quiet", "-print_format", "json",
+            "-show_streams", file_path
+        ]
+        out = subprocess.check_output(cmd, stderr=subprocess.STDOUT, timeout=3)
+        info = json.loads(out)
+        streams = info.get("streams", [])
+        has_audio = any(s.get("codec_type") == "audio" for s in streams)
+        if has_audio:
+            return file_path
+        
+        # Audio track missing! Add silent AAC audio track using ffmpeg
+        print(f"[Player] Audio track missing in {file_path}! Merging silent AAC audio track...")
+        fixed_path = file_path.rsplit(".", 1)[0] + "_fixed.mp4"
+        ff_cmd = [
+            "ffmpeg", "-y", "-i", file_path,
+            "-f", "lavfi", "-i", "anullsrc=channel_layout=stereo:sample_rate=48000",
+            "-c:v", "copy", "-c:a", "aac", "-shortest", fixed_path
+        ]
+        subprocess.run(ff_cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=15)
+        if os.path.exists(fixed_path) and os.path.getsize(fixed_path) > 1000:
+            os.replace(fixed_path, file_path)
+            print(f"[Player] Fixed audio track successfully for {file_path}")
+    except Exception as e:
+        print(f"[Player] Audio track check note: {e}")
+    return file_path
+
 FILE_DOWNLOAD_LOCKS = {}
 
 async def download_song_ytdlp(youtube_url: str, dest_path: str, mode: str, progress_callback=None) -> bool:
@@ -1163,6 +1197,9 @@ class PlayerManager:
 
         # PyTgCalls v3 dev: pass NO custom ffmpeg_parameters to avoid crash/immediate stream end
         # AudioQuality.STUDIO already sets 48kHz, 128kbps stereo — best quality without filters
+        # Ensure media file has a valid audio track before PyTgCalls starts streaming
+        local_path = ensure_audio_track(local_path)
+
         stream = SeekableMediaStream(
             media_path=local_path,
             audio_path=None,
@@ -1183,25 +1220,38 @@ class PlayerManager:
             try:
                 await self._pytg.play(chat_id, stream)
             except Exception as play_err:
-                print(f"[Player] Initial play attempt: {play_err}. Checking if group call needs creation...")
+                print(f"[Player] Initial play attempt note: {play_err}. Checking if call needs start/join...")
                 try:
                     from pyrogram.raw.functions.phone import CreateGroupCall
                     import random
-                    try:
-                        await self._assistant.get_chat(chat_id)
-                    except Exception:
-                        pass
                     peer_as = await self._assistant.resolve_peer(chat_id)
                     await self._assistant.invoke(
                         CreateGroupCall(peer=peer_as, random_id=random.randint(0, 0x7FFFFFFF))
                     )
                     print(f"[Player] Started new voice chat in {chat_id}")
-                    await asyncio.sleep(1.2)
+                    await asyncio.sleep(1.0)
                 except Exception as start_err:
                     print(f"[Player] CreateGroupCall status: {start_err}")
                 
-                # Retry play after call creation
-                await self._pytg.play(chat_id, stream)
+                # Retry play after call creation attempt
+                try:
+                    await self._pytg.play(chat_id, stream)
+                except Exception as play_err2:
+                    print(f"[Player] Retry play attempt note: {play_err2}")
+                    # If still failing, retry with audio-only mode as fallback
+                    if mode == "video":
+                        print(f"[Player] Video stream failed, retrying in Audio mode...")
+                        audio_stream = SeekableMediaStream(
+                            media_path=local_path,
+                            audio_path=None,
+                            video_parameters=vid_params,
+                            audio_parameters=AudioQuality.STUDIO,
+                            video_flags=MediaStream.Flags.IGNORE,
+                            audio_flags=MediaStream.Flags.REQUIRED,
+                        )
+                        await self._pytg.play(chat_id, audio_stream)
+                    else:
+                        raise play_err2
 
             self.active_calls.add(chat_id)
             self.in_call_chats.add(chat_id)
