@@ -206,7 +206,7 @@ async def _extract_gameover_api(video_url: str, mode: str) -> Optional[Dict[str,
                                         stream_url = s_val
                                         break
                                     elif isinstance(s_val, dict):
-                                        stream_url = s_val.get("video_url") or s_val.get("url")
+                                        stream_url = s_val.get("audio_url") or s_val.get("video_url") or s_val.get("url")
                                         if stream_url:
                                             break
 
