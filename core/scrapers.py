@@ -160,6 +160,7 @@ async def _extract_gameover_api(video_url: str, mode: str) -> Optional[Dict[str,
                     print(f"[Scraper/GameOverAPI] Response Status: {resp.status} from {api_base}")
                     if resp.status == 200:
                         data = await resp.json()
+                        print(f"[Scraper/GameOverAPI] JSON status: '{data.get('status')}' | keys: {list(data.keys())}")
                         if data.get("status") == "success":
                             v_info = data.get("video_info", {})
                             stream_url = None
@@ -209,6 +210,9 @@ async def _extract_gameover_api(video_url: str, mode: str) -> Optional[Dict[str,
                                         if stream_url:
                                             break
 
+                            if not stream_url and data.get("url"):
+                                stream_url = data.get("url")
+
                             if stream_url:
                                 print(f"[Scraper/GameOverAPI] SUCCESS! Extracted Stream URL from {api_base}")
                                 return {
@@ -217,6 +221,8 @@ async def _extract_gameover_api(video_url: str, mode: str) -> Optional[Dict[str,
                                     "duration": v_info.get("duration", 0),
                                     "thumbnail": v_info.get("thumbnail") or f"https://img.youtube.com/vi/{video_id}/hqdefault.jpg"
                                 }
+                            else:
+                                print(f"[Scraper/GameOverAPI] Warning: status success but stream_url was null in response from {api_base}")
                         else:
                             print(f"[Scraper/GameOverAPI] API Status='{data.get('status')}' | Code='{data.get('code')}' | Message='{data.get('message')}'")
                     else:
