@@ -27,6 +27,7 @@ async def download_file(url: str, dest_path: str, progress_callback=None) -> boo
             pass
 
     max_retries = 3
+    timeout = aiohttp.ClientTimeout(total=None, connect=20, sock_read=40)
     headers = {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36',
         'Accept': '*/*',
