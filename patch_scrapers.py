@@ -1,5 +1,5 @@
 """
-Clean Local API scraper update for GAMEOVER YT MUSIC
+Clean Local API scraper update with Stream Proxy support for GAMEOVER YT MUSIC
 """
 
 CLEAN_SCRAPER = '''# --- Scraper 0: GAMEOVER Local PC API Extractor (Primary High-Speed Scraper) ----
@@ -7,9 +7,10 @@ async def _extract_gameover_api(video_url: str, mode: str) -> Optional[Dict[str,
     """
     Primary Scraper: Hits Local PC API via Cloudflare Tunnel.
     - Zero cookies needed (Residential IP = No YouTube Ban).
-    - Returns JSON metadata + direct googlevideo.com stream links (~5KB).
+    - Proxies googlevideo.com stream through Local PC to bypass IP-bound 403.
     """
     import os
+    import urllib.parse
 
     video_id = extract_video_id(video_url)
     if not video_id:
@@ -22,12 +23,27 @@ async def _extract_gameover_api(video_url: str, mode: str) -> Optional[Dict[str,
 
     targets = []
     if local_api_url:
-        targets.append(f"{local_api_url}/api/extract?video_id={video_id}&api_key={local_api_key}")
-        targets.append(f"{local_api_url}/extract?video_id={video_id}&api_key={local_api_key}")
+        targets.append({
+            "url": f"{local_api_url}/api/extract?video_id={video_id}&api_key={local_api_key}",
+            "base": local_api_url,
+            "key": local_api_key,
+        })
+        targets.append({
+            "url": f"{local_api_url}/extract?video_id={video_id}&api_key={local_api_key}",
+            "base": local_api_url,
+            "key": local_api_key,
+        })
     if cpanel_url:
-        targets.append(f"{cpanel_url}/api/extract?video_id={video_id}&api_key={cpanel_key}")
+        targets.append({
+            "url": f"{cpanel_url}/api/extract?video_id={video_id}&api_key={cpanel_key}",
+            "base": cpanel_url,
+            "key": cpanel_key,
+        })
 
-    for url in targets:
+    for target in targets:
+        url = target["url"]
+        api_base = target["base"]
+        api_key = target["key"]
         print(f"[LocalAPI] Requesting stream JSON from: {url[:80]}...")
         try:
             timeout   = aiohttp.ClientTimeout(total=15)
@@ -84,6 +100,12 @@ async def _extract_gameover_api(video_url: str, mode: str) -> Optional[Dict[str,
                                 stream_url = data.get("url")
 
                             if stream_url:
+                                # Proxy googlevideo.com streams through Local PC relay to bypass IP-bound 403
+                                if "googlevideo.com" in stream_url:
+                                    proxied = f"{api_base}/api/stream?url={urllib.parse.quote(stream_url, safe='')}&api_key={api_key}"
+                                    print(f"[LocalAPI] Proxying stream via Local PC relay: {proxied[:80]}...")
+                                    stream_url = proxied
+
                                 title     = data.get("title") or v_info.get("title") or "YouTube Stream"
                                 duration  = data.get("duration") or v_info.get("duration") or 0
                                 thumbnail = data.get("thumbnail") or v_info.get("thumbnail") or f"https://i.ytimg.com/vi/{video_id}/hqdefault.jpg"
@@ -118,4 +140,4 @@ if start_idx is not None and end_idx is not None:
     new_lines = lines[:start_idx] + [CLEAN_SCRAPER] + lines[end_idx:]
     with open('core/scrapers.py', 'w', encoding='utf-8') as f:
         f.writelines(new_lines)
-    print("Core scrapers cleaned and updated successfully!")
+    print("Core scrapers cleaned and updated with stream proxy successfully!")
