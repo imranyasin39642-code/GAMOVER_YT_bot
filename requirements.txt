@@ -7,3 +7,4 @@ TgCrypto
 requests
 yt-dlp
 aiofiles
+psutil
