@@ -187,13 +187,38 @@ async def download_song_ytdlp(youtube_url: str, dest_path: str, mode: str, progr
                         )
                     last_update[0] = now
 
+        # Step 1: High-Speed Scraper / GAMEOVER API First (Zero 403 / Zero Cookie Error)
+        try:
+            print(f"[Player/Downloader] Initiating Primary High-Speed API extraction for {youtube_url}...")
+            res = await resolve_stream_url(youtube_url, mode)
+            if res and res.get("url"):
+                stream_url = res["url"]
+                print(f"[Player/Downloader] Resolved Direct Stream URL via GAMEOVER API: {res.get('title', 'YouTube Video')[:35]} | Downloading...")
+                ok = await download_file(stream_url, dest_path, progress_callback)
+                if ok and os.path.exists(dest_path) and os.path.getsize(dest_path) > 5000:
+                    v_id = extract_video_id(youtube_url)
+                    if v_id and res.get("title"):
+                        save_to_cache(
+                            video_id=v_id,
+                            mode=mode,
+                            file_path=dest_path,
+                            title=res["title"],
+                            duration=res.get("duration", 0),
+                            thumbnail=res.get("thumbnail")
+                        )
+                    print(f"[Player/Downloader] API Direct Stream Download SUCCESS! File size: {os.path.getsize(dest_path) // 1024} KB")
+                    return True
+        except Exception as api_err:
+            print(f"[Player/Downloader] Primary API extraction note: {api_err}")
+
+        # Step 2: Local yt-dlp direct download fallback
         base_path = dest_path.rsplit('.', 1)[0]
         outtmpl = base_path + '.%(ext)s'
         
         if mode == "video":
             _, q, fps_val, max_h = get_configured_video_parameters()
             format_spec = f"bestvideo[height<={max_h}][fps<={fps_val}]+bestaudio/best[height<={max_h}]/best"
-            print(f"[Downloader] Target Quality: {q} ({max_h}p) @ {fps_val} FPS")
+            print(f"[Downloader] Fallback yt-dlp Target Quality: {q} ({max_h}p) @ {fps_val} FPS")
         else:
             format_spec = "bestaudio/best"
 
@@ -272,19 +297,7 @@ async def download_song_ytdlp(youtube_url: str, dest_path: str, mode: str, progr
                     return True
             return os.path.exists(dest_path) and os.path.getsize(dest_path) > 5000
         except Exception as e:
-            print(f"[Player/ytdlp-downloader] Primary download note: {e}")
-
-    # 2. Fallback: Resolve direct stream URL via Cobalt / Invidious / Piped / Scraper chain
-    try:
-        res = await resolve_stream_url(youtube_url, mode)
-        if res and res.get("url"):
-            stream_url = res["url"]
-            print(f"[Player/ytdlp-downloader] Resolved direct fallback URL via {res.get('title')[:30]}...")
-            ok = await download_file(stream_url, dest_path, progress_callback)
-            if ok and os.path.exists(dest_path) and os.path.getsize(dest_path) > 5000:
-                return True
-    except Exception as fb_err:
-        print(f"[Player/ytdlp-downloader] Fallback download error: {fb_err}")
+            print(f"[Player/ytdlp-downloader] Fallback yt-dlp download note: {e}")
 
     return False
 
