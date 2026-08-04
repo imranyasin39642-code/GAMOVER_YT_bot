@@ -226,22 +226,32 @@ async def download_song_ytdlp(youtube_url: str, dest_path: str, mode: str, progr
                         )
                     last_update[0] = now
 
-        # Step 1: Fast Metadata Resolution via Local PC API / Scrapers
-        meta_title = None
-        meta_dur = 0
-        meta_thumb = None
+        # Step 1: High-Speed Stream Proxy via Local PC API (Zero 403 / Zero Cookie Error)
         try:
-            print(f"[Player/Downloader] Resolving metadata for {youtube_url}...")
+            print(f"[Player/Downloader] Initiating Primary High-Speed Stream Proxy for {youtube_url}...")
             res = await resolve_stream_url(youtube_url, mode)
-            if res and res.get("title"):
-                meta_title = res.get("title")
-                meta_dur = res.get("duration", 0)
-                meta_thumb = res.get("thumbnail")
-                print(f"[Player/Downloader] Metadata resolved: {meta_title[:40]}")
-        except Exception as meta_err:
-            print(f"[Player/Downloader] Metadata note: {meta_err}")
+            if res and res.get("url"):
+                stream_url = res["url"]
+                title = res.get("title", "YouTube Video")
+                print(f"[Player/Downloader] Resolved Stream Proxy via GAMEOVER API: {title[:35]} | Downloading...")
+                ok = await download_file(stream_url, dest_path, progress_callback)
+                if ok and os.path.exists(dest_path) and os.path.getsize(dest_path) > 5000:
+                    v_id = extract_video_id(youtube_url)
+                    if v_id and title:
+                        save_to_cache(
+                            video_id=v_id,
+                            mode=mode,
+                            file_path=dest_path,
+                            title=title,
+                            duration=res.get("duration", 0),
+                            thumbnail=res.get("thumbnail")
+                        )
+                    print(f"[Player/Downloader] API Proxy Download SUCCESS! File size: {os.path.getsize(dest_path) // 1024} KB")
+                    return True
+        except Exception as api_err:
+            print(f"[Player/Downloader] Primary API proxy extraction note: {api_err}")
 
-        # Step 2: Direct VPS Download using Android VR + Web Creator Client (Zero 403 / Zero Cookie Error)
+        # Step 2: Fallback yt-dlp Direct Download using Android VR + Web Creator Client
         base_path = dest_path.rsplit('.', 1)[0]
         outtmpl = base_path + '.%(ext)s'
         
