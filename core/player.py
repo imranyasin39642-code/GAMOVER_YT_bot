@@ -27,11 +27,15 @@ async def download_file(url: str, dest_path: str, progress_callback=None) -> boo
             pass
 
     max_retries = 3
-    timeout = aiohttp.ClientTimeout(total=None, connect=20, sock_read=40)
-    
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36',
+        'Accept': '*/*',
+        'Accept-Language': 'en-US,en;q=0.9',
+        'Referer': 'https://www.youtube.com/',
+    }
     for attempt in range(1, max_retries + 1):
         try:
-            async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with aiohttp.ClientSession(timeout=timeout, headers=headers) as session:
                 async with session.get(url, allow_redirects=True) as response:
                     if response.status != 200:
                         raise Exception(f"HTTP Status {response.status}")
@@ -250,7 +254,7 @@ async def download_song_ytdlp(youtube_url: str, dest_path: str, mode: str, progr
             },
             'extractor_args': {
                 'youtube': {
-                    'player_client': ['android', 'ios', 'tvhtml5', 'web', 'mweb']
+                    'player_client': ['android_vr', 'ios', 'web_creator', 'tvhtml5', 'android']
                 }
             }
         }

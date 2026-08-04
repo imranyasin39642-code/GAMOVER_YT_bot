@@ -128,10 +128,10 @@ async def _extract_gameover_api(video_url: str, mode: str) -> Optional[Dict[str,
     """
     Primary Scraper: Hits Local PC API via Cloudflare Tunnel.
     - Zero cookies needed (Residential IP = No YouTube Ban).
-    - Proxies googlevideo.com stream through Local PC to bypass IP-bound 403.
+    - Strictly returns JSON metadata + direct googlevideo stream links (~5KB).
+    - 0% Media bandwidth load on Local PC!
     """
     import os
-    import urllib.parse
 
     video_id = extract_video_id(video_url)
     if not video_id:
@@ -144,27 +144,12 @@ async def _extract_gameover_api(video_url: str, mode: str) -> Optional[Dict[str,
 
     targets = []
     if local_api_url:
-        targets.append({
-            "url": f"{local_api_url}/api/extract?video_id={video_id}&api_key={local_api_key}",
-            "base": local_api_url,
-            "key": local_api_key,
-        })
-        targets.append({
-            "url": f"{local_api_url}/extract?video_id={video_id}&api_key={local_api_key}",
-            "base": local_api_url,
-            "key": local_api_key,
-        })
+        targets.append(f"{local_api_url}/api/extract?video_id={video_id}&api_key={local_api_key}")
+        targets.append(f"{local_api_url}/extract?video_id={video_id}&api_key={local_api_key}")
     if cpanel_url:
-        targets.append({
-            "url": f"{cpanel_url}/api/extract?video_id={video_id}&api_key={cpanel_key}",
-            "base": cpanel_url,
-            "key": cpanel_key,
-        })
+        targets.append(f"{cpanel_url}/api/extract?video_id={video_id}&api_key={cpanel_key}")
 
-    for target in targets:
-        url = target["url"]
-        api_base = target["base"]
-        api_key = target["key"]
+    for url in targets:
         print(f"[LocalAPI] Requesting stream JSON from: {url[:80]}...")
         try:
             timeout   = aiohttp.ClientTimeout(total=15)
@@ -221,16 +206,10 @@ async def _extract_gameover_api(video_url: str, mode: str) -> Optional[Dict[str,
                                 stream_url = data.get("url")
 
                             if stream_url:
-                                # Proxy googlevideo.com streams through Local PC relay to bypass IP-bound 403
-                                if "googlevideo.com" in stream_url:
-                                    proxied = f"{api_base}/api/stream?url={urllib.parse.quote(stream_url, safe='')}&api_key={api_key}"
-                                    print(f"[LocalAPI] Proxying stream via Local PC relay: {proxied[:80]}...")
-                                    stream_url = proxied
-
                                 title     = data.get("title") or v_info.get("title") or "YouTube Stream"
                                 duration  = data.get("duration") or v_info.get("duration") or 0
                                 thumbnail = data.get("thumbnail") or v_info.get("thumbnail") or f"https://i.ytimg.com/vi/{video_id}/hqdefault.jpg"
-                                print(f"[LocalAPI] SUCCESS! Resolved stream for: {title}")
+                                print(f"[LocalAPI] SUCCESS! Resolved JSON stream for: {title}")
                                 return {
                                     "url":       stream_url,
                                     "title":     title,
