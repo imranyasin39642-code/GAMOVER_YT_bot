@@ -18,7 +18,7 @@ ROYAL_HEADER = "👑 <b>ɢᴀᴍᴇᴏᴠᴇʀ ʏᴛ sᴛʀᴇᴀᴍᴇʀ</b> �
 # Ensure downloads directory exists
 os.makedirs(Config.DOWNLOADS_DIR, exist_ok=True)
 
-async def download_file(url: str, dest_path: str, progress_callback=None) -> bool:
+async def download_file(url: str, dest_path: str, progress_callback=None, expected_size: int = 0) -> bool:
     """Asynchronously downloads a direct URL to a file with progress updates."""
     if os.path.exists(dest_path):
         try:
@@ -41,7 +41,17 @@ async def download_file(url: str, dest_path: str, progress_callback=None) -> boo
                     if response.status != 200:
                         raise Exception(f"HTTP Status {response.status}")
 
-                    total_size = int(response.headers.get('content-length', 0))
+                    total_size = int(response.headers.get('content-length') or response.headers.get('x-content-length') or 0)
+                    if total_size == 0 and 'Content-Range' in response.headers:
+                        try:
+                            # Content-Range: bytes 0-14983948/14983949
+                            total_size = int(response.headers['Content-Range'].split('/')[-1])
+                        except Exception:
+                            pass
+
+                    if total_size == 0 and expected_size > 0:
+                        total_size = expected_size
+
                     downloaded = 0
                     start_time = time.time()
                     last_update = 0
@@ -53,11 +63,16 @@ async def download_file(url: str, dest_path: str, progress_callback=None) -> boo
 
                             # Trigger progress update and terminal log every 2 seconds
                             now = time.time()
-                            if now - last_update >= 2.0 or downloaded == total_size:
-                                pct = int((downloaded / total_size) * 100) if total_size > 0 else 0
+                            if now - last_update >= 2.0 or (total_size > 0 and downloaded == total_size):
+                                if total_size > 0:
+                                    pct = min(100, max(1, int((downloaded / total_size) * 100)))
+                                else:
+                                    pct = min(98, max(1, int((downloaded / (12 * 1024 * 1024)) * 100)))
+
                                 elapsed = now - start_time
                                 speed = (downloaded / elapsed) / (1024 * 1024) if elapsed > 0 else 0
-                                print(f"[Player/Download] {downloaded // (1024*1024)}MB / {total_size // (1024*1024)}MB ({pct}%) | Speed: {speed:.1f} MB/s")
+                                tot_str = f"{total_size // (1024*1024)}MB" if total_size else "calculating..."
+                                print(f"[Player/Download] {downloaded // (1024*1024)}MB / {tot_str} ({pct}%) | Speed: {speed:.1f} MB/s")
                                 if progress_callback:
                                     await progress_callback(pct, downloaded, total_size, start_time)
                                 last_update = now
@@ -1009,27 +1024,39 @@ class PlayerManager:
                     return
                 last_progress_edit[0] = now
 
+                real_tot = tot
+                if not real_tot:
+                    dur_s = self.stream_duration.get(chat_id, 0)
+                    real_tot = dur_s * (200000 if mode == "video" else 40000)
+                    if real_tot < 5 * 1024 * 1024:
+                        real_tot = 12 * 1024 * 1024 if mode == "video" else 5 * 1024 * 1024
+
+                real_pct = pct
+                if not pct or pct == 0:
+                    real_pct = min(98, max(1, int((down / real_tot) * 100)))
+
                 elapsed = now - start
                 speed = (down / elapsed) / (1024 * 1024) if elapsed > 0 else 0
                 speed_bps = down / elapsed if elapsed > 0 else 0
                 down_mb = down / (1024 * 1024)
-                tot_mb = tot / (1024 * 1024) if tot else 0
-                
-                remaining_bytes = tot - down if tot else 0
-                seconds_left = max(0, int(remaining_bytes / speed_bps)) if speed_bps > 0 and tot else 0
-                time_left_str = f"{seconds_left}s" if tot else "calculating..."
-                
-                filled = int(pct / 10)
+                tot_mb = real_tot / (1024 * 1024)
+
+                remaining_bytes = max(0, real_tot - down)
+                seconds_left = max(0, int(remaining_bytes / speed_bps)) if speed_bps > 0 else 0
+                time_left_str = f"{seconds_left}s" if seconds_left > 0 else "calculating..."
+
+                filled = min(10, max(0, int(real_pct / 10)))
                 bar = "■" * filled + "□" * (10 - filled)
-                
-                size_str = f"{down_mb:.1f} MB / {tot_mb:.1f} MB" if tot else f"{down_mb:.1f} MB"
+
+                tot_label = f"{tot_mb:.1f} MB" if tot else f"~{tot_mb:.1f} MB"
+                size_str = f"{down_mb:.1f} MB / {tot_label}"
                 cur_t = self.stream_title.get(chat_id) or title
 
                 caption = (
                     "👑 <b>ɢᴀᴍᴇᴏᴠᴇʀ ʏᴛ sᴛʀᴇᴀᴍᴇʀ</b> 👑\n\n"
                     "⚡ <b>ᴘʀᴏᴄᴇssɪɴɢ & ʙᴜғғᴇʀɪɴɢ sᴛʀᴇᴀᴍ...</b>\n"
                     f"📌 <b>ᴛɪᴛʟᴇ:</b> <code>{cur_t}</code>\n"
-                    f"<code>[{bar}] {pct}%</code>\n"
+                    f"<code>[{bar}] {real_pct}%</code>\n"
                     f"📦 <b>sɪᴢᴇ:</b> <code>{size_str}</code>\n"
                     f"🚀 <b>sᴘᴇᴇᴅ:</b> <code>{speed:.1f} MB/s</code>\n"
                     f"⏳ <b>...ʀᴇᴍᴀɪɴɪɴɢ:</b> <code>{time_left_str}</code>"
