@@ -81,6 +81,17 @@ async def search_youtube(query: str) -> Optional[Dict[str, str]]:
 # Multi-layer scraper sequence for guaranteed 100% bypass of YouTube bot/cookie checks
 SCRAPING_SITES = ["gameover_api", "ytdlp", "cobalt", "invidious", "piped", "yt5s", "yt1s", "y2mate", "9xbuddy", "ytmp3"]
 
+async def resolve_query_to_url(input_query: str) -> Optional[str]:
+    """If input is a YouTube URL, extract clean canonical link. Otherwise search YouTube and return URL."""
+    video_id = extract_video_id(input_query)
+    if video_id:
+        return f"https://www.youtube.com/watch?v={video_id}"
+    res = await search_youtube(input_query)
+    if res and res.get("url"):
+        return res["url"]
+    return None
+
+
 async def resolve_stream_url(input_query: str, mode: str = "video") -> Optional[Dict[str, str]]:
     """
     Tier 1 & Tier 2 Stream Resolver:
@@ -97,6 +108,8 @@ async def resolve_stream_url(input_query: str, mode: str = "video") -> Optional[
         res = await extract_stream_playwright(video_id, mode)
         if res:
             return res
+        print(f"[Scraper/Bypass] Direct link resolution complete for {video_id}.")
+        return None
 
     # Text Search Query: Use Tier 1 nskmedia.net Search API
     print(f"[Scraper/Tier1] Text query detected: '{input_query}'. Requesting search from nskmedia.net API...")

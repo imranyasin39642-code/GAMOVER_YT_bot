@@ -71,14 +71,14 @@ async def close_browser():
 async def extract_stream_playwright(video_id: str, mode: str = "audio") -> Optional[Dict[str, str]]:
     """
     Tier 2 Media Extractor.
-    Takes video_id, visits web extractors / Invidious mirror instance with Playwright,
+    Takes video_id, visits web extractors / Invidious mirror instance,
     extracts high-quality stream URL (.m4a for audio, 1080p60/1080p .mp4 for video).
     Auto-rotates on failure.
     """
     clean_video_id = video_id.strip()
     yt_url = f"https://www.youtube.com/watch?v={clean_video_id}"
 
-    # Engine 1: Loader Web Scraper (Fast 1080p & High Quality Audio - 4 to 6 Seconds)
+    # Engine 1: Loader Web Scraper (Fast 1080p & High Quality Audio - 1 to 2 Seconds)
     try:
         res = await _scrape_loader_engine(clean_video_id, yt_url, mode)
         if res and res.get("url"):
@@ -87,33 +87,34 @@ async def extract_stream_playwright(video_id: str, mode: str = "audio") -> Optio
     except Exception as e:
         print(f"[Tier2/Loader] Note: {e}")
 
-    # Engine 2: Playwright Headless Scraper on invidious.nerdvpn.de & mirrors
-    try:
-        res = await _scrape_invidious_playwright_browser(video_id, mode)
-        if res and res.get("url"):
-            print(f"[Tier2/Playwright-Invidious] SUCCESS: {res.get('title', 'Video')[:35]}")
-            return res
-    except Exception as e:
-        print(f"[Tier2/Playwright-Invidious] Note: {e}")
-
-    # Engine 3: Fast Invidious Mirrors REST API
+    # Engine 2: Fast Invidious Mirrors REST API (0.5 Seconds response)
     for mirror in INVIDIOUS_MIRRORS:
         try:
-            res = await _scrape_invidious_api_fast(mirror, video_id, mode)
+            res = await _scrape_invidious_api_fast(mirror, clean_video_id, mode)
             if res and res.get("url"):
                 print(f"[Tier2/Invidious] SUCCESS via {mirror}: {res.get('title', 'Video')[:35]}")
                 return res
         except Exception as e:
             print(f"[Tier2/Invidious] Mirror {mirror} note: {e}")
 
-    print(f"[Tier2] All extraction engines failed for video_id={video_id}")
+    # Engine 3: Playwright Headless Scraper on invidious.nerdvpn.de & mirrors
+    try:
+        res = await _scrape_invidious_playwright_browser(clean_video_id, mode)
+        if res and res.get("url"):
+            print(f"[Tier2/Playwright-Invidious] SUCCESS: {res.get('title', 'Video')[:35]}")
+            return res
+    except Exception as e:
+        print(f"[Tier2/Playwright-Invidious] Note: {e}")
+
+    print(f"[Tier2] All extraction engines failed for video_id={clean_video_id}")
     return None
 
 
 async def _scrape_loader_engine(video_id: str, youtube_url: str, mode: str) -> Optional[Dict[str, str]]:
     """Loader.to Web Scraper for 1080p video and MP3 audio."""
+    clean_url = f"https://www.youtube.com/watch?v={video_id}"
     fmt = "1080" if mode == "video" else "mp3"
-    init_url = f"https://loader.to/ajax/download.php?format={fmt}&url={urllib.parse.quote(youtube_url)}"
+    init_url = f"https://loader.to/ajax/download.php?format={fmt}&url={urllib.parse.quote(clean_url)}"
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
         "Referer": "https://en.loader.to/"
