@@ -11,7 +11,7 @@ from pytgcalls.types.raw import VideoParameters
 
 from config import Config
 from core.scrapers import resolve_stream_url, extract_video_id, search_youtube, is_youtube_url
-from core.db import save_to_cache, get_cached_path, get_cached_item
+from core.db import save_to_cache, get_cached_path, get_cached_item, get_from_cache
 
 ROYAL_HEADER = "👑 <b>ɢᴀᴍᴇᴏᴠᴇʀ ʏᴛ sᴛʀᴇᴀᴍᴇʀ</b> 👑\n\n"
 
@@ -73,13 +73,16 @@ async def download_file(url: str, dest_path: str, progress_callback=None) -> boo
     return False
 
 
-def auto_clean_downloads(max_folder_mb: int = 800, keep_files: set = None):
-    """Automatically cleans old downloaded files when downloads/ folder size exceeds max_folder_mb (800 MB)."""
+def auto_clean_downloads(max_folder_mb: int = 800, keep_files: set = None, max_age_days: int = 3):
+    """Clean downloads directory if total size exceeds limit OR files are older than max_age_days (3 days)."""
     downloads_dir = Config.DOWNLOADS_DIR
     if not os.path.exists(downloads_dir):
         return
 
     keep_files = keep_files or set()
+    now_time = time.time()
+    max_age_seconds = max_age_days * 86400
+
     try:
         files = []
         total_bytes = 0
@@ -87,8 +90,19 @@ def auto_clean_downloads(max_folder_mb: int = 800, keep_files: set = None):
             fp = os.path.join(downloads_dir, f)
             if os.path.isfile(fp):
                 sz = os.path.getsize(fp)
+                mtime = os.path.getmtime(fp)
+                
+                # Check 3-day age purge
+                if (now_time - mtime) > max_age_seconds and fp not in keep_files:
+                    try:
+                        os.remove(fp)
+                        print(f"[AutoClean] Purged 3+ days old file: {f}")
+                        continue
+                    except Exception:
+                        pass
+
                 total_bytes += sz
-                files.append((fp, os.path.getmtime(fp), sz))
+                files.append((fp, mtime, sz))
                 
         limit_bytes = max_folder_mb * 1024 * 1024
         if total_bytes > limit_bytes:
@@ -187,147 +201,56 @@ def ensure_audio_track(file_path: str) -> str:
 
 FILE_DOWNLOAD_LOCKS = {}
 
-async def download_song_ytdlp(youtube_url: str, dest_path: str, mode: str, progress_callback=None) -> bool:
-    """Asynchronously download and merge video + audio tracks using yt-dlp with multi-client rotation and fallback APIs."""
-    import yt_dlp
-    import glob
+async def download_song_ytdlp(youtube_url: str, dest_path: str, mode: str, progress_callback=None, title_callback=None) -> bool:
+    """
+    Tier 2 Pure Stream Downloader.
+    Resolves direct stream URL via Playwright + Invidious mirror scraper (0% yt-dlp, 0% cookies).
+    Downloads media directly using high-speed aiohttp stream.
+    """
     import shutil
-    
-    # Auto-clean disk if downloads folder exceeds 800 MB
     auto_clean_downloads(max_folder_mb=800)
 
-    # Fast direct hit check before lock
     if os.path.exists(dest_path) and os.path.getsize(dest_path) > 5000:
-        print(f"[Player/ytdlp] Direct hit! File {dest_path} is already completely downloaded.")
         return True
 
-    lock = FILE_DOWNLOAD_LOCKS.setdefault(dest_path, asyncio.Lock())
-    async with lock:
-        # Re-check inside lock in case concurrent task finished downloading while waiting
-        if os.path.exists(dest_path) and os.path.getsize(dest_path) > 5000:
-            print(f"[Player/ytdlp] Direct hit (after lock wait)! File {dest_path} is already completely downloaded.")
+    v_id = extract_video_id(youtube_url)
+    if not v_id:
+        return False
+
+    cached = get_from_cache(v_id, mode)
+    if cached and os.path.exists(cached["file_path"]) and os.path.getsize(cached["file_path"]) > 5000:
+        if cached["file_path"] != dest_path:
+            try:
+                shutil.copy(cached["file_path"], dest_path)
+            except Exception:
+                pass
+        if title_callback and cached.get("title"):
+            title_callback(cached["title"])
+        print(f"[Player] Direct cache hit for ID {v_id}! Playing instantly.")
+        return True
+
+    print(f"[Player/Tier2] Initiating Stream Resolution for {youtube_url} ({mode})...")
+    res = await resolve_stream_url(youtube_url, mode)
+
+    if res and res.get("url"):
+        stream_url = res["url"]
+        title = res.get("title", "YouTube Video")
+        if title_callback and title != "YouTube Video":
+            title_callback(title)
+        print(f"[Player/Tier2] Resolved Stream URL: {title[:35]} | Downloading...")
+        ok = await download_file(stream_url, dest_path, progress_callback)
+        if ok and os.path.exists(dest_path) and os.path.getsize(dest_path) > 5000:
+            ensure_audio_track(dest_path)
+            save_to_cache(
+                video_id=v_id,
+                mode=mode,
+                file_path=dest_path,
+                title=title,
+                duration=res.get("duration", 0),
+                thumbnail=res.get("thumbnail") or f"https://i.ytimg.com/vi/{v_id}/hqdefault.jpg"
+            )
+            print(f"[Player/Tier2] Download SUCCESS! File size: {os.path.getsize(dest_path) // 1024} KB")
             return True
-
-        loop = asyncio.get_running_loop()
-        last_update = [time.time()]
-        
-        def hook(d):
-            if d['status'] == 'downloading':
-                downloaded = d.get('downloaded_bytes', 0)
-                total = d.get('total_bytes') or d.get('total_bytes_estimate', 0)
-                pct = int((downloaded / total) * 100) if total > 0 else 0
-                
-                now = time.time()
-                if now - last_update[0] >= 6.0:
-                    if progress_callback:
-                        asyncio.run_coroutine_threadsafe(
-                            progress_callback(pct, downloaded, total, last_update[0]),
-                            loop
-                        )
-                    last_update[0] = now
-
-        # Step 1: Fast Metadata Resolution via Local PC API (0% Media Load on PC!)
-        meta_title = None
-        meta_dur = 0
-        meta_thumb = None
-        try:
-            print(f"[Player/Downloader] Resolving metadata from Local PC (0% Media Load)...")
-            res = await resolve_stream_url(youtube_url, mode)
-            if res and res.get("title"):
-                meta_title = res.get("title")
-                meta_dur = res.get("duration", 0)
-                meta_thumb = res.get("thumbnail")
-                print(f"[Player/Downloader] Metadata resolved: {meta_title[:40]}")
-        except Exception as meta_err:
-            print(f"[Player/Downloader] Metadata note: {meta_err}")
-
-        # Step 2: Direct VPS High-Speed Download using Android VR + Web Creator Client (Zero 403 / Zero Cookie Error)
-        base_path = dest_path.rsplit('.', 1)[0]
-        outtmpl = base_path + '.%(ext)s'
-        
-        if mode == "video":
-            _, q, fps_val, max_h = get_configured_video_parameters()
-            format_spec = f"best[height<={max_h}]/bestvideo[height<={max_h}][fps<={fps_val}]+bestaudio/best[height<={max_h}]/best"
-            print(f"[Downloader] VPS Direct Download Target Quality: {q} ({max_h}p) @ {fps_val} FPS")
-        else:
-            format_spec = "bestaudio[ext=m4a]/bestaudio/best"
-
-        # Safe clean up of broken non-target files
-        for f in glob.glob(base_path + "*"):
-            if not f.endswith(".mp4"):
-                try:
-                    os.remove(f)
-                except Exception:
-                    pass
-
-        ydl_opts = {
-            'format': format_spec,
-            'outtmpl': outtmpl,
-            'quiet': True,
-            'no_warnings': True,
-            'nocheckcertificate': True,
-            'progress_hooks': [hook],
-            'merge_output_format': 'mp4',
-            'socket_timeout': 30.0,
-            'retries': 10,
-            'fragment_retries': 10,
-            'extractor_retries': 10,
-            'source_address': '0.0.0.0',
-            'http_headers': {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36',
-                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
-                'Accept-Language': 'en-US,en;q=0.5',
-            },
-            'extractor_args': {
-                'youtube': {
-                    'player_client': ['android_vr', 'web_creator', 'tvhtml5']
-                }
-            }
-        }
-        if Config.USE_PROXY and Config.get_proxy_url():
-            ydl_opts['proxy'] = Config.get_proxy_url()
-        
-        info_dict = {}
-        def run():
-            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                info = ydl.extract_info(youtube_url, download=True)
-                if info:
-                    info_dict["title"] = info.get("title", "YouTube Video")
-                    info_dict["duration"] = int(info.get("duration") or 0)
-                    info_dict["thumbnail"] = info.get("thumbnail") or f"https://img.youtube.com/vi/{extract_video_id(youtube_url) or ''}/hqdefault.jpg"
-
-        try:
-            await loop.run_in_executor(None, run)
-            
-            # Check and rename output extension formats if merged to something else
-            for ext in ['.mp4', '.mkv', '.webm', '.m4a', '.mp3', '.opus']:
-                p = base_path + ext
-                if os.path.exists(p) and os.path.getsize(p) > 5000:
-                    if p != dest_path:
-                        if os.path.exists(dest_path):
-                            try:
-                                os.remove(dest_path)
-                            except Exception:
-                                pass
-                        try:
-                            shutil.move(p, dest_path)
-                        except Exception:
-                            pass
-                    
-                    v_id = extract_video_id(youtube_url)
-                    if v_id and info_dict.get("title"):
-                        save_to_cache(
-                            video_id=v_id,
-                            mode=mode,
-                            file_path=dest_path,
-                            title=info_dict["title"],
-                            duration=info_dict.get("duration", 0),
-                            thumbnail=info_dict.get("thumbnail")
-                        )
-                    return True
-            return os.path.exists(dest_path) and os.path.getsize(dest_path) > 5000
-        except Exception as e:
-            print(f"[Player/ytdlp-downloader] Fallback yt-dlp download note: {e}")
 
     return False
 
@@ -563,9 +486,9 @@ class PlayerManager:
             f"🎧 <b>Sᴛʀᴇᴀᴍ Mᴏᴅᴇ:</b> <code>{mode_label}</code>\n"
             f"👤 <b>Rᴇǫᴜᴇsᴛᴇᴅ Bʏ:</b> {req_user_str}\n"
             f"💬 <b>Gʀᴏᴜᴘ CHAT:</b> <b>{chat_title}</b> (<code>{chat_id}</code>)\n\n"
-            f"🌐 <b>API Eɴɢɪɴᴇ:</b> <code>https://nskmedia.net/api/extract</code>\n"
-            f"⚡ <b>API Response:</b> <code>{elapsed_time:.2f}s HTTP 200 OK</code>\n"
-            f"🟢 <b>Cᴏᴏᴋɪᴇ Status:</b> Active Session / Zero-Cookie Fallback\n"
+            f"🌐 <b>API Eɴɢɪɴᴇ:</b> <code>2-Tier Engine (nskmedia.net + Playwright Loader)</code>\n"
+            f"⚡ <b>Sᴘᴇᴇᴅ:</b> <code>{elapsed_time:.2f}s (VPS 1Gbps Fast Stream)</code>\n"
+            f"🟢 <b>Cᴏᴏᴋɪᴇ Sᴛᴀᴛᴜs:</b> <code>100% PURGED (Zero Cookies / Zero Captchas)</code>\n"
             f"🔗 <b>Lɪɴᴋ:</b> <a href=\"{youtube_url}\">Watch on YouTube</a>"
         )
 
@@ -1070,16 +993,15 @@ class PlayerManager:
             self.stream_thumbnail[chat_id] = f"https://img.youtube.com/vi/{video_id}/hqdefault.jpg"
 
             # 3. Download target file directly with progress updates (Single Pass Instant Start)
-            if status_msg:
-                try:
-                    await status_msg.edit_text(f"{ROYAL_HEADER}⚡ <b>Starting high-speed download...</b>")
-                except Exception:
-                    pass
-            
+            def title_update_cb(resolved_title):
+                nonlocal title
+                title = resolved_title
+                self.stream_title[chat_id] = resolved_title
+
             last_progress_edit = [0.0]
             async def progress_cb(pct, down, tot, start):
                 now = time.time()
-                if now - last_progress_edit[0] < 6.0:
+                if now - last_progress_edit[0] < 3.0 and pct < 100:
                     return
                 last_progress_edit[0] = now
 
@@ -1096,25 +1018,27 @@ class PlayerManager:
                 filled = int(pct / 10)
                 bar = "■" * filled + "□" * (10 - filled)
                 
-                size_str = f"{down_mb:.1f} MB / {tot_mb:.1f} MB" if tot else f"{down_mb:.1f} MB / calculating..."
-                
+                size_str = f"{down_mb:.1f} MB / {tot_mb:.1f} MB" if tot else f"{down_mb:.1f} MB"
+                cur_t = self.stream_title.get(chat_id) or title
+
                 caption = (
                     "👑 <b>ɢᴀᴍᴇᴏᴠᴇʀ ʏᴛ sᴛʀᴇᴀᴍᴇʀ</b> 👑\n\n"
-                    "⚡ <b>ᴘʀᴏᴄᴇssɪɴɢ ᴍᴇᴅɪᴀ...</b>\n"
-                    f"📌 <b>ᴛɪᴛʟᴇ:</b> <code>{title}</code>\n"
+                    "⚡ <b>ᴘʀᴏᴄᴇssɪɴɢ & ʙᴜғғᴇʀɪɴɢ sᴛʀᴇᴀᴍ...</b>\n"
+                    f"📌 <b>ᴛɪᴛʟᴇ:</b> <code>{cur_t}</code>\n"
                     f"<code>[{bar}] {pct}%</code>\n"
                     f"📦 <b>sɪᴢᴇ:</b> <code>{size_str}</code>\n"
                     f"🚀 <b>sᴘᴇᴇᴅ:</b> <code>{speed:.1f} MB/s</code>\n"
                     f"⏳ <b>...ʀᴇᴍᴀɪɴɪɴɢ:</b> <code>{time_left_str}</code>"
                 )
-                try:
-                    await status_msg.edit_text(caption, parse_mode=enums.ParseMode.HTML)
-                except Exception:
-                    pass
+                if status_msg:
+                    try:
+                        await status_msg.edit_text(caption, parse_mode=enums.ParseMode.HTML)
+                    except Exception:
+                        pass
 
-            # Try native yt-dlp first (Instant start in 1s!)
+            # Try native Tier 2 fast download
             print(f"[Player] Initiating native fast download for webpage_url: {youtube_url}")
-            ok = await download_song_ytdlp(youtube_url, dest_path, mode, progress_cb)
+            ok = await download_song_ytdlp(youtube_url, dest_path, mode, progress_cb, title_update_cb)
             
             # Re-read cache to update real title and duration resolved in single-step download
             cached = get_cached_item(video_id, mode)

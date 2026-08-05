@@ -416,6 +416,10 @@ def get_cached_item(video_id: str, mode: str) -> dict:
     finally:
         conn.close()
 
+def get_from_cache(video_id: str, mode: str) -> dict:
+    """Alias for get_cached_item."""
+    return get_cached_item(video_id, mode)
+
 # ─── Settings Helpers ───────────────────────────────────
 def get_setting(key: str) -> str:
     conn = get_db()

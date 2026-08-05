@@ -81,45 +81,93 @@ async def search_youtube(query: str) -> Optional[Dict[str, str]]:
 # Multi-layer scraper sequence for guaranteed 100% bypass of YouTube bot/cookie checks
 SCRAPING_SITES = ["gameover_api", "ytdlp", "cobalt", "invidious", "piped", "yt5s", "yt1s", "y2mate", "9xbuddy", "ytmp3"]
 
-async def resolve_stream_url(youtube_url: str, mode: str = "video") -> Optional[Dict[str, str]]:
+async def resolve_stream_url(input_query: str, mode: str = "video") -> Optional[Dict[str, str]]:
     """
-    Iterate over multi-layer scraper chain to resolve direct video or audio streams.
-    Returns a dict with 'url', 'title', 'duration', 'thumbnail' on success, or None on failure.
+    Tier 1 & Tier 2 Stream Resolver:
+    1. Direct Link Bypass: If input is a direct YouTube URL, parse video_id locally and call Tier 2 Playwright scraper IMMEDIATELY! Skip Tier 1 API completely!
+    2. Text Search Query: Call Tier 1 API (nskmedia.net/api/search) first to resolve video_id, then call Tier 2 Playwright scraper.
     """
-    video_id = extract_video_id(youtube_url)
-    if not video_id:
-        print(f"[Scraper] Invalid YouTube URL: {youtube_url}")
-        return None
+    from core.playwright_scraper import extract_stream_playwright
 
-    clean_url = f"https://www.youtube.com/watch?v={video_id}"
-    print(f"[Scraper] Resolving {mode} stream for YouTube ID: {video_id}")
+    video_id = extract_video_id(input_query)
+    
+    # Requirement #1: Direct Link Bypass (Speed Optimization)
+    if video_id:
+        print(f"[Scraper/Bypass] Direct YouTube link detected ({video_id}). Bypassing Tier 1 API -> Executing Tier 2 Playwright Scraper...")
+        res = await extract_stream_playwright(video_id, mode)
+        if res:
+            return res
 
-    extractors = {
-        "gameover_api": _extract_gameover_api,
-        "ytdlp":        _extract_ytdlp_direct,
-        "cobalt":       _extract_cobalt,
-        "invidious":    _extract_invidious,
-        "piped":        _extract_piped,
-        "yt5s":         _extract_yt5s,
-        "yt1s":         _extract_yt1s,
-        "y2mate":       _extract_y2mate,
-        "9xbuddy":      _extract_9xbuddy,
-        "ytmp3":        _extract_ytmp3,
-    }
+    # Text Search Query: Use Tier 1 nskmedia.net Search API
+    print(f"[Scraper/Tier1] Text query detected: '{input_query}'. Requesting search from nskmedia.net API...")
+    search_res = await _search_nskmedia_api(input_query)
+    if search_res and search_res.get("video_id"):
+        v_id = search_res["video_id"]
+        res = await extract_stream_playwright(v_id, mode)
+        if res:
+            if not res.get("title") or res.get("title") == "YouTube Stream":
+                res["title"] = search_res.get("title", "YouTube Stream")
+            return res
 
-    for site in SCRAPING_SITES:
-        try:
-            fn = extractors.get(site)
-            if not fn:
-                continue
-            res = await fn(clean_url, mode)
-            if res and res.get("url"):
-                print(f"[Scraper] SUCCESS via {site}! Resolved Title: {res.get('title')}")
-                return res
-        except Exception as e:
-            print(f"[Scraper] Site {site} failed for {video_id}: {e}")
+    # Fallback HTML search if Tier 1 API fails
+    search_fallback = await search_youtube(input_query)
+    if search_fallback and search_fallback.get("video_id"):
+        v_id = search_fallback["video_id"]
+        res = await extract_stream_playwright(v_id, mode)
+        if res:
+            res["title"] = search_fallback.get("title", res.get("title"))
+            return res
 
-    print(f"[Scraper] All scrapers failed to resolve {video_id}.")
+    return None
+
+
+async def _search_nskmedia_api(query: str) -> Optional[Dict[str, str]]:
+    """Hits nskmedia.net API search endpoint."""
+    import os
+    api_key = os.getenv("GAMEOVER_API_KEY", "GAMEOVER_SECRET_123")
+    url = f"https://nskmedia.net/api/search?query={urllib.parse.quote(query)}&limit=5&api_key={api_key}"
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url, ssl=False, timeout=aiohttp.ClientTimeout(total=5)) as resp:
+                if resp.status == 200:
+                    data = await resp.json()
+                    results = data.get("results") or data.get("videos") or []
+                    if results:
+                        item = results[0]
+                        v_id = item.get("video_id") or item.get("id")
+                        if v_id:
+                            return {
+                                "video_id": v_id,
+                                "title": item.get("title", query),
+                                "thumbnail": item.get("thumbnail") or f"https://i.ytimg.com/vi/{v_id}/hqdefault.jpg"
+                            }
+    except Exception as e:
+        print(f"[Tier1/Search] nskmedia search note: {e}")
+    return None
+
+
+async def extract_playlist_info(playlist_url: str) -> Optional[Dict]:
+    """
+    Hits nskmedia.net API playlist endpoint to fetch up to 50 video IDs in 2-3 seconds.
+    """
+    import os
+    api_key = os.getenv("GAMEOVER_API_KEY", "GAMEOVER_SECRET_123")
+    url = f"https://nskmedia.net/api/playlist?url={urllib.parse.quote(playlist_url)}&limit=50&api_key={api_key}"
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url, ssl=False, timeout=aiohttp.ClientTimeout(total=8)) as resp:
+                if resp.status == 200:
+                    data = await resp.json()
+                    videos = data.get("videos") or []
+                    title = data.get("playlist_title") or "YouTube Playlist"
+                    print(f"[Tier1/Playlist] nskmedia returned {len(videos)} tracks for playlist '{title}'")
+                    return {
+                        "title": title,
+                        "videos": videos
+                    }
+    except Exception as e:
+        print(f"[Tier1/Playlist] nskmedia playlist note: {e}")
+    return None
     return None
 
 

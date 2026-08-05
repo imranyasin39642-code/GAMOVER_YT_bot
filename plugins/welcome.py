@@ -7,7 +7,7 @@ Caches welcome.mp4 file_id in SQLite, auto re-uploading if disk file changes.
 import os
 import time
 from pyrogram import Client, filters, enums
-from pyrogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton
+from pyrogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
 
 from config import Config
 from core.db import get_setting, set_setting, is_group_welcome_enabled, set_group_welcome_enabled, is_group_start_enabled, set_group_start_enabled
@@ -219,14 +219,268 @@ def register(app: Client):
 
         start_text = make_card(
             f"{ROYAL_HEADER}"
-            f"👋 <b>Hello {user_name}!</b>\n\n"
-            "Main <b>GameOver YT Streamer Bot</b> hoon — Telegram groups me High-Quality Video + Bass Equalized Audio streaming ke liye!\n\n"
-            "Muje apne group me add karein aur admin permissions dein audio/video play karne ke liye."
+            f"👋 <b>WELCOME, {user_name.upper()}!</b> 🔥\n\n"
+            "I am <b>GameOver YT Streamer</b> — A PREMIUM HIGH-PERFORMANCE YOUTUBE VIDEO AND AUDIO STREAMING BOT.\n\n"
+            "⚡ <b>SUPPORTED SOURCES:</b>\n"
+            "• <b>YOUTUBE</b> (LOCKED 1080P 60 FPS / STUDIO 320KBPS STEREO)\n\n"
+            "CLICK THE BUTTONS BELOW TO EXPLORE COMMANDS!"
         )
         buttons = InlineKeyboardMarkup([
-            [InlineKeyboardButton("ADD ME TO YOUR GROUP 👑", url=f"https://t.me/{Config.BOT_USERNAME}?startgroup=true", style="success")]
+            [
+                InlineKeyboardButton("➕ ADD ME TO YOUR GROUP 👑", url=f"https://t.me/{Config.BOT_USERNAME}?startgroup=true", style="success")
+            ],
+            [
+                InlineKeyboardButton("📚 HELP & COMMANDS", callback_data="cb_help", style="primary"),
+                InlineKeyboardButton("ℹ️ ABOUT BOT", callback_data="cb_about", style="primary")
+            ],
+            [
+                InlineKeyboardButton("🎵 PLAY COMMANDS", callback_data="cb_play_cmds", style="success"),
+                InlineKeyboardButton("👑 ADMIN PANEL", callback_data="cb_admin_cmds", style="danger")
+            ]
         ])
         await message.reply_text(start_text, reply_markup=buttons, parse_mode=enums.ParseMode.HTML)
+
+    @app.on_callback_query(filters.regex(r"^cb_"))
+    async def welcome_callbacks(client: Client, query: CallbackQuery):
+        data = query.data
+        user_name = query.from_user.first_name if query.from_user else "User"
+
+        if data == "cb_help":
+            await query.answer("Opening Help & Commands...")
+            text = make_card(
+                f"{ROYAL_HEADER}"
+                f"📚 <b>ɢᴀᴍᴇᴏᴠᴇʀ Cᴏᴍᴍᴀɴᴅs Dᴀsʜʙᴏᴀʀᴅ</b> 📚\n\n"
+                f"🎵 <b>USER PLAY COMMANDS:</b>\n"
+                f"👉 <code>/vd [song/link]</code> - Stream 1080p Video in Group VC\n"
+                f"👉 <code>/ad [song/link]</code> - Stream 320kbps Audio in Group VC\n"
+                f"👉 <code>/dw [yt link]</code> - Direct Download Video to Telegram Chat\n"
+                f"👉 <code>/skip</code> - Skip to next song in queue\n"
+                f"👉 <code>/pause</code> - Pause current playback\n"
+                f"👉 <code>/resume</code> - Resume paused stream\n"
+                f"👉 <code>/stop</code> - Stop playback & clear queue\n"
+                f"👉 <code>/queue</code> - View track queue list\n\n"
+                f"👑 <b>ADMIN CONTROL COMMANDS:</b>\n"
+                f"👉 <code>/admin</code> - Open Full Interactive Control Panel\n"
+                f"👉 <code>/approvecontrol</code> - Reply to user to grant bot control\n"
+                f"👉 <code>/broadcast</code> - Broadcast announcement to groups\n"
+            )
+            markup = InlineKeyboardMarkup([
+                [
+                    InlineKeyboardButton("🎵 PLAY COMMANDS", callback_data="cb_play_cmds", style="success"),
+                    InlineKeyboardButton("👑 ADMIN COMMANDS", callback_data="cb_admin_cmds", style="danger")
+                ],
+                [
+                    InlineKeyboardButton("🔙 BACK TO MAIN MENU", callback_data="cb_back_start", style="primary"),
+                    InlineKeyboardButton("❌ CLOSE", callback_data="cb_close", style="danger")
+                ]
+            ])
+            try:
+                await query.message.edit_text(text, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
+            except Exception:
+                pass
+
+        elif data == "cb_about":
+            await query.answer("Opening About Info...")
+            text = make_card(
+                f"{ROYAL_HEADER}"
+                f"ℹ️ <b>Aʙᴏᴜᴛ GᴀᴍᴇOᴠᴇʀ YT Sᴛʀᴇᴀᴍᴇʀ</b> ℹ️\n\n"
+                f"• <b>Bot Version:</b> <code>v3.0 Ultra High Performance</code>\n"
+                f"• <b>Architecture:</b> <code>2-Tier Engine (nskmedia.net + Playwright Loader)</code>\n"
+                f"• <b>Cookie Status:</b> <code>100% PURGED (Zero Cookies / Zero Captchas)</code>\n"
+                f"• <b>Audio Quality:</b> <code>320kbps Studio Stereo Sound</code>\n"
+                f"• <b>Video Target:</b> <code>1080p 60FPS / 2K Supported</code>\n\n"
+                f"👑 <b>Developed & Powered by GameOver Automation Team</b>"
+            )
+            markup = InlineKeyboardMarkup([
+                [
+                    InlineKeyboardButton("🔙 BACK TO MAIN MENU", callback_data="cb_back_start", style="primary"),
+                    InlineKeyboardButton("❌ CLOSE", callback_data="cb_close", style="danger")
+                ]
+            ])
+            try:
+                await query.message.edit_text(text, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
+            except Exception:
+                pass
+
+        elif data == "cb_play_cmds":
+            await query.answer("Opening Play Guide...")
+            text = make_card(
+                f"{ROYAL_HEADER}"
+                f"🎵 <b>Pʟᴀʏ Cᴏᴍᴍᴀɴᴅs Gᴜɪᴅᴇ</b> 🎵\n\n"
+                f"Group Voice Chat me high-speed playback ke liye Commands:\n\n"
+                f"🎬 <b>VIDEO MODE (1080p 60FPS):</b>\n"
+                f"• <code>/vd [song name]</code>\n"
+                f"• <code>/vd https://youtube.com/watch?v=...</code>\n\n"
+                f"🎵 <b>AUDIO MODE (320kbps Studio):</b>\n"
+                f"• <code>/ad [song name]</code>\n"
+                f"• <code>/ad https://youtu.be/...</code>\n\n"
+                f"📥 <b>DIRECT CHAT DOWNLOAD:</b>\n"
+                f"• <code>/dw [youtube link]</code>"
+            )
+            markup = InlineKeyboardMarkup([
+                [
+                    InlineKeyboardButton("🔙 BACK TO MENU", callback_data="cb_help", style="primary"),
+                    InlineKeyboardButton("❌ CLOSE", callback_data="cb_close", style="danger")
+                ]
+            ])
+            try:
+                await query.message.edit_text(text, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
+            except Exception:
+                pass
+
+        elif data == "cb_admin_cmds":
+            await query.answer("Opening Admin Guide...")
+            text = make_card(
+                f"{ROYAL_HEADER}"
+                f"👑 <b>Aᴅᴍɪɴ Cᴏɴᴛʀᴏʟ Gᴜɪᴅᴇ</b> 👑\n\n"
+                f"Owner & Approved Sudo Users ke Control Commands:\n\n"
+                f"⚡ <code>/admin</code> - Interactive Control Dashboard (Video Quality, FPS, File Cache, Speed Test)\n"
+                f"👥 <code>/approvecontrol</code> - Reply to a user's message in group to grant them bot commands control\n"
+                f"📢 <code>/broadcast</code> - Send announcement card to all active group chats\n"
+                f"📡 <code>/nst</code> - Run 5-worker Cloudflare speed test on VPS"
+            )
+            markup = InlineKeyboardMarkup([
+                [
+                    InlineKeyboardButton("🔙 BACK TO MENU", callback_data="cb_help", style="primary"),
+                    InlineKeyboardButton("❌ CLOSE", callback_data="cb_close", style="danger")
+                ]
+            ])
+            try:
+                await query.message.edit_text(text, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
+            except Exception:
+                pass
+
+        elif data == "cb_back_start":
+            await query.answer("Back to Menu...")
+            text = make_card(
+                f"{ROYAL_HEADER}"
+                f"👋 <b>WELCOME, {user_name.upper()}!</b> 🔥\n\n"
+                "I am <b>GameOver YT Streamer</b> — A PREMIUM HIGH-PERFORMANCE YOUTUBE VIDEO AND AUDIO STREAMING BOT.\n\n"
+                "⚡ <b>SUPPORTED SOURCES:</b>\n"
+                "• <b>YOUTUBE</b> (LOCKED 1080P 60 FPS / STUDIO 320KBPS STEREO)\n\n"
+                "CLICK THE BUTTONS BELOW TO EXPLORE COMMANDS!"
+            )
+            buttons = InlineKeyboardMarkup([
+                [
+                    InlineKeyboardButton("➕ ADD ME TO YOUR GROUP 👑", url=f"https://t.me/{Config.BOT_USERNAME}?startgroup=true", style="success")
+                ],
+                [
+                    InlineKeyboardButton("📚 HELP & COMMANDS", callback_data="cb_help", style="primary"),
+                    InlineKeyboardButton("ℹ️ ABOUT BOT", callback_data="cb_about", style="primary")
+                ],
+                [
+                    InlineKeyboardButton("🎵 PLAY COMMANDS", callback_data="cb_play_cmds", style="success"),
+                    InlineKeyboardButton("👑 ADMIN PANEL", callback_data="cb_admin_cmds", style="danger")
+                ]
+            ])
+            try:
+                await query.message.edit_text(text, reply_markup=buttons, parse_mode=enums.ParseMode.HTML)
+            except Exception:
+                pass
+
+        elif data == "cb_close":
+            await query.answer("Closing...")
+            try:
+                await query.message.delete()
+            except Exception:
+                pass
+
+    @app.on_message(filters.command(["dw", "download"]))
+    async def download_command(client: Client, message: Message):
+        chat_id = message.chat.id
+        args = message.command[1:] if len(message.command) > 1 else []
+        if not args:
+            await message.reply_text(
+                make_card(
+                    f"{ROYAL_HEADER}"
+                    f"📥 <b>DIRECT MEDIA DOWNLOADER</b>\n\n"
+                    f"Send YouTube Link to download video/audio file directly to this chat!\n\n"
+                    f"<b>Usage:</b>\n"
+                    f"👉 <code>/dw https://youtu.be/agXAuW9qG70</code>\n"
+                    f"👉 <code>/dw Blue Eyes Yo Yo Honey Singh</code>"
+                ),
+                parse_mode=enums.ParseMode.HTML
+            )
+            return
+
+        query_str = " ".join(args)
+        status_msg = await message.reply_text(
+            make_card(
+                f"{ROYAL_HEADER}"
+                f"⚡ <b>Resolving & Downloading Media File...</b>\n"
+                f"📌 <b>Query:</b> <code>{query_str[:40]}</code>\n"
+                f"⏳ <i>Executing 2-Tier Engine... Please wait!</i>"
+            ),
+            parse_mode=enums.ParseMode.HTML
+        )
+
+        from core.scrapers import resolve_query_to_url, extract_video_id
+        from core.player import download_song_ytdlp, get_cached_item
+        import os
+
+        yt_url = await resolve_query_to_url(query_str)
+        if not yt_url:
+            await status_msg.edit_text(make_card("❌ <b>Could not resolve YouTube link!</b>"), parse_mode=enums.ParseMode.HTML)
+            return
+
+        video_id = extract_video_id(yt_url)
+        dest_path = os.path.join(Config.DOWNLOADS_DIR, f"{video_id}_video.mp4")
+
+        # Download via Tier 2 Playwright / Loader
+        ok = await download_song_ytdlp(yt_url, dest_path, "video")
+        if not ok or not os.path.exists(dest_path):
+            await status_msg.edit_text(make_card("❌ <b>Media download failed!</b>"), parse_mode=enums.ParseMode.HTML)
+            return
+
+        cached = get_cached_item(video_id, "video") or {}
+        title = cached.get("title") or "YouTube Video"
+
+        sz_bytes = os.path.getsize(dest_path)
+        sz_mb = sz_bytes / (1024 * 1024)
+
+        await status_msg.edit_text(
+            make_card(
+                f"{ROYAL_HEADER}"
+                f"📤 <b>Uploading Media ({sz_mb:.1f} MB) to Telegram Chat...</b>\n"
+                f"📌 <b>Title:</b> <code>{title}</code>"
+            ),
+            parse_mode=enums.ParseMode.HTML
+        )
+
+        dl_markup = InlineKeyboardMarkup([
+            [InlineKeyboardButton(f"📹 VIDEO FILE ({sz_mb:.1f} MB)", callback_data="cb_close", style="success")]
+        ])
+
+        caption_text = (
+            f"👑 <b>ɢᴀᴍᴇᴏᴠᴇʀ ʏᴛ Dᴏᴡɴʟᴏᴀᴅᴇʀ</b> 👑\n\n"
+            f"📌 <b>Title:</b> <b>{title}</b>\n"
+            f"📦 <b>Size:</b> <code>{sz_mb:.1f} MB</code>\n"
+            f"⚡ <b>Engine:</b> 2-Tier Playwright Engine\n"
+            f"🔗 <b>Link:</b> <a href=\"{yt_url}\">Watch on YouTube</a>"
+        )
+
+        try:
+            # Telegram Bot limit for video player is 50MB. Send as document if > 50MB!
+            if sz_bytes > 50 * 1024 * 1024:
+                await client.send_document(
+                    chat_id=chat_id,
+                    document=dest_path,
+                    caption=caption_text,
+                    reply_markup=dl_markup,
+                    parse_mode=enums.ParseMode.HTML
+                )
+            else:
+                await client.send_video(
+                    chat_id=chat_id,
+                    video=dest_path,
+                    supports_streaming=True,
+                    caption=caption_text,
+                    reply_markup=dl_markup,
+                    parse_mode=enums.ParseMode.HTML
+                )
+            await status_msg.delete()
+        except Exception as e:
+            await status_msg.edit_text(make_card(f"❌ Failed to send media file: {e}"), parse_mode=enums.ParseMode.HTML)
 
     @app.on_message(filters.new_chat_members & filters.group)
     async def welcome_new_members(client: Client, message: Message):
@@ -277,7 +531,7 @@ def register(app: Client):
                 # Bot itself joined a group - send intro message
                 intro_text = make_card(
                     f"{ROYAL_HEADER}"
-                    "🎮 <b>ɢᴀᴍᴇᴏᴠᴇʀ ʏᴛ sᴛʀᴇᴀᴍᴇʀ is here!</b>\n\n"
+                    "🎮 <b>ɢᴀᴍᴇᴏᴠᴇʀ ʏᴛ sᴛʀᴇᴀṁᴇʀ is here!</b>\n\n"
                     "Main group voice chat mein <b>High-Quality Video + Bass Equalized Audio</b> stream kar sakta hoon.\n\n"
                     "🎬 <b>Video Playback start karne ke liye:</b>\n"
                     "👉 <code>/vd [song name/link]</code> ya <code>/video [song name/link]</code>\n\n"

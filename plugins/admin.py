@@ -217,7 +217,7 @@ def get_network_manager_markup() -> InlineKeyboardMarkup:
 
 def get_quality_menu_markup(current_q: str = None, current_fps: str = None) -> InlineKeyboardMarkup:
     from core.db import get_setting
-    q   = current_q or get_setting("quality_pref") or "720p"
+    q   = current_q or get_setting("quality_pref") or "1080p"
     fps = current_fps or get_setting("fps_pref") or "60"
 
     q_4k_icon   = "🟢 " if q == "4K" else ""
@@ -481,6 +481,22 @@ def register(app: Client):
         return user_id == Config.OWNER_ID or is_sudo_user(user_id)
 
 
+
+    @app.on_message(filters.command(["restart", "reboot", "reset"]) & filters.create(is_admin_filter))
+    async def restart_command(client: Client, message: Message):
+        status_msg = await message.reply_text(
+            f"{ROYAL_HEADER}"
+            f"🔄 <b>RESTARTING BOT PROCESS...</b>\n\n"
+            f"⚡ <i>Stopping active PyTgCalls streams & refreshing process terminal... Please wait a few seconds!</i>",
+            parse_mode=enums.ParseMode.HTML
+        )
+        from core.player import player_manager
+        try:
+            await player_manager.close()
+        except Exception:
+            pass
+        print(f"[System] Owner/Admin initiated bot restart via command...")
+        os._exit(0)
 
     @app.on_message(filters.command("admin") & filters.private & filters.create(is_admin_filter))
     async def admin_panel(client: Client, message: Message):
@@ -1198,6 +1214,12 @@ def register(app: Client):
             file_key = parts[1]
             page = int(parts[2])
             
+            if user_id not in admin_states or "files" not in admin_states[user_id]:
+                files = list_downloads_files()
+                if user_id not in admin_states:
+                    admin_states[user_id] = {}
+                admin_states[user_id]["files"] = {str(idx): f["path"] for idx, f in enumerate(files)}
+
             file_path = admin_states.get(user_id, {}).get("files", {}).get(file_key)
             if not file_path or not os.path.exists(file_path):
                 await query.answer("⚠️ File no longer exists on disk!", show_alert=True)
@@ -1244,6 +1266,12 @@ def register(app: Client):
             file_key = parts[1]
             page = int(parts[2])
             
+            if user_id not in admin_states or "files" not in admin_states[user_id]:
+                files = list_downloads_files()
+                if user_id not in admin_states:
+                    admin_states[user_id] = {}
+                admin_states[user_id]["files"] = {str(idx): f["path"] for idx, f in enumerate(files)}
+
             file_path = admin_states.get(user_id, {}).get("files", {}).get(file_key)
             if not file_path or not os.path.exists(file_path):
                 await query.answer("⚠️ File no longer exists on disk!", show_alert=True)
@@ -1292,6 +1320,12 @@ def register(app: Client):
             file_key = parts[1]
             page = int(parts[2])
             
+            if user_id not in admin_states or "files" not in admin_states[user_id]:
+                files = list_downloads_files()
+                if user_id not in admin_states:
+                    admin_states[user_id] = {}
+                admin_states[user_id]["files"] = {str(idx): f["path"] for idx, f in enumerate(files)}
+
             file_path = admin_states.get(user_id, {}).get("files", {}).get(file_key)
             if not file_path or not os.path.exists(file_path):
                 await query.answer("⚠️ File no longer exists on disk!", show_alert=True)
