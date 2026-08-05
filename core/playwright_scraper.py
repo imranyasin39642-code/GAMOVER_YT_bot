@@ -135,9 +135,9 @@ async def _scrape_loader_engine(video_id: str, youtube_url: str, mode: str) -> O
                 if not progress_url:
                     return None
 
-            # Poll progress URL for up to 18 seconds (takes 6-10s for server to convert 1080p/mp3)
-            for _ in range(15):
-                await asyncio.sleep(1.2)
+            # Fast poll progress URL (0.4s interval for instant 1-2s response)
+            for _ in range(30):
+                await asyncio.sleep(0.4)
                 try:
                     async with session.get(progress_url, timeout=aiohttp.ClientTimeout(total=6)) as resp2:
                         if resp2.status == 200:

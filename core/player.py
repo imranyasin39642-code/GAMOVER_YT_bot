@@ -47,15 +47,19 @@ async def download_file(url: str, dest_path: str, progress_callback=None) -> boo
                     last_update = 0
 
                     with open(dest_path, "wb") as f:
-                        async for chunk in response.content.iter_chunked(256 * 1024): # 256KB chunks
+                        async for chunk in response.content.iter_chunked(1024 * 1024): # 1MB chunks for max VPS speed
                             f.write(chunk)
                             downloaded += len(chunk)
 
-                            # Trigger progress update every 3 seconds
+                            # Trigger progress update and terminal log every 2 seconds
                             now = time.time()
-                            if progress_callback and (now - last_update >= 3.0 or downloaded == total_size):
+                            if now - last_update >= 2.0 or downloaded == total_size:
                                 pct = int((downloaded / total_size) * 100) if total_size > 0 else 0
-                                await progress_callback(pct, downloaded, total_size, start_time)
+                                elapsed = now - start_time
+                                speed = (downloaded / elapsed) / (1024 * 1024) if elapsed > 0 else 0
+                                print(f"[Player/Download] {downloaded // (1024*1024)}MB / {total_size // (1024*1024)}MB ({pct}%) | Speed: {speed:.1f} MB/s")
+                                if progress_callback:
+                                    await progress_callback(pct, downloaded, total_size, start_time)
                                 last_update = now
 
                     if downloaded < 10000:
