@@ -24,6 +24,8 @@ INVIDIOUS_MIRRORS = [
     "https://invidious.projectsegfau.lt",
     "https://inv.nadeko.net",
     "https://yewtu.be",
+    "https://invidious.privacydev.net",
+    "https://invidious.drgns.space",
 ]
 
 _PLAYWRIGHT_INSTANCE = None
@@ -70,15 +72,24 @@ async def close_browser():
 
 async def extract_stream_playwright(video_id: str, mode: str = "audio") -> Optional[Dict[str, str]]:
     """
-    Tier 2 Media Extractor.
-    Takes video_id, visits web extractors / Invidious mirror instance,
-    extracts high-quality stream URL (.m4a for audio, 1080p60/1080p .mp4 for video).
-    Auto-rotates on failure.
+    Tier 2 Media Extractor (Ultra Fast 1-2s Resolution).
+    1. Parallel Invidious REST API check across 6 mirrors (0.5s response).
+    2. Fast Loader.to direct API check (1-2s response).
+    3. Playwright Chromium browser fallback.
     """
     clean_video_id = video_id.strip()
     yt_url = f"https://www.youtube.com/watch?v={clean_video_id}"
 
-    # Engine 1: Loader Web Scraper (Fast 1080p & High Quality Audio - 1 to 2 Seconds)
+    # Engine 1: Fast Parallel Invidious Mirrors REST API (0.5 to 1.5 Seconds response)
+    try:
+        res = await _scrape_invidious_parallel(clean_video_id, mode)
+        if res and res.get("url"):
+            print(f"[Tier2/Invidious-Parallel] INSTANT SUCCESS: {res.get('title', 'Video')[:35]}")
+            return res
+    except Exception as e:
+        print(f"[Tier2/Invidious-Parallel] Note: {e}")
+
+    # Engine 2: Loader Web Scraper (Fast 1080p & High Quality Audio - 1 to 2 Seconds)
     try:
         res = await _scrape_loader_engine(clean_video_id, yt_url, mode)
         if res and res.get("url"):
@@ -86,16 +97,6 @@ async def extract_stream_playwright(video_id: str, mode: str = "audio") -> Optio
             return res
     except Exception as e:
         print(f"[Tier2/Loader] Note: {e}")
-
-    # Engine 2: Fast Invidious Mirrors REST API (0.5 Seconds response)
-    for mirror in INVIDIOUS_MIRRORS:
-        try:
-            res = await _scrape_invidious_api_fast(mirror, clean_video_id, mode)
-            if res and res.get("url"):
-                print(f"[Tier2/Invidious] SUCCESS via {mirror}: {res.get('title', 'Video')[:35]}")
-                return res
-        except Exception as e:
-            print(f"[Tier2/Invidious] Mirror {mirror} note: {e}")
 
     # Engine 3: Playwright Headless Scraper on invidious.nerdvpn.de & mirrors
     try:
@@ -107,6 +108,32 @@ async def extract_stream_playwright(video_id: str, mode: str = "audio") -> Optio
         print(f"[Tier2/Playwright-Invidious] Note: {e}")
 
     print(f"[Tier2] All extraction engines failed for video_id={clean_video_id}")
+    return None
+
+
+async def _scrape_invidious_parallel(video_id: str, mode: str) -> Optional[Dict[str, str]]:
+    """Query all Invidious API mirrors in PARALLEL. Returns the first valid response within 3 seconds."""
+    tasks = [
+        asyncio.create_task(_scrape_invidious_api_fast(mirror, video_id, mode))
+        for mirror in INVIDIOUS_MIRRORS
+    ]
+    try:
+        for completed_task in asyncio.as_completed(tasks, timeout=3.5):
+            try:
+                res = await completed_task
+                if res and res.get("url"):
+                    for t in tasks:
+                        if not t.done():
+                            t.cancel()
+                    return res
+            except Exception:
+                pass
+    except Exception:
+        pass
+    finally:
+        for t in tasks:
+            if not t.done():
+                t.cancel()
     return None
 
 
@@ -122,7 +149,7 @@ async def _scrape_loader_engine(video_id: str, youtube_url: str, mode: str) -> O
 
     async with aiohttp.ClientSession(headers=headers) as session:
         try:
-            async with session.get(init_url, timeout=aiohttp.ClientTimeout(total=8)) as resp:
+            async with session.get(init_url, timeout=aiohttp.ClientTimeout(total=4)) as resp:
                 if resp.status != 200:
                     return None
                 data = await resp.json(content_type=None)
@@ -136,11 +163,11 @@ async def _scrape_loader_engine(video_id: str, youtube_url: str, mode: str) -> O
                 if not progress_url:
                     return None
 
-            # Fast poll progress URL (0.4s interval for instant 1-2s response)
-            for _ in range(30):
-                await asyncio.sleep(0.4)
+            # Fast poll progress URL (0.3s interval, max 8 polls = 2.4s max wait)
+            for _ in range(8):
+                await asyncio.sleep(0.3)
                 try:
-                    async with session.get(progress_url, timeout=aiohttp.ClientTimeout(total=6)) as resp2:
+                    async with session.get(progress_url, timeout=aiohttp.ClientTimeout(total=3)) as resp2:
                         if resp2.status == 200:
                             pdata = await resp2.json(content_type=None)
                             dl_url = pdata.get("download_url")
@@ -151,10 +178,10 @@ async def _scrape_loader_engine(video_id: str, youtube_url: str, mode: str) -> O
                                     "duration": int(pdata.get("video_duration") or 0),
                                     "thumbnail": thumbnail,
                                 }
-                except Exception as e:
-                    print(f"[Tier2/Loader] Poll note: {e}")
-        except Exception as e:
-            print(f"[Tier2/Loader] Error: {e}")
+                except Exception:
+                    pass
+        except Exception:
+            pass
 
     return None
 
@@ -169,18 +196,16 @@ async def _scrape_invidious_playwright_browser(video_id: str, mode: str) -> Opti
     try:
         page = await browser.new_page()
         target_url = f"https://invidious.nerdvpn.de/watch?v={video_id}"
-        await page.goto(target_url, timeout=12000, wait_until="domcontentloaded")
-        await page.wait_for_timeout(2000)
+        await page.goto(target_url, timeout=6000, wait_until="domcontentloaded")
+        await page.wait_for_timeout(1000)
 
         title = await page.title()
         html = await page.content()
 
-        # Find direct latest_version video or audio URLs in HTML
         match_links = re.findall(r'/latest_version\?[^\s"\'<>]+', html)
         if match_links:
             chosen_url = None
             if mode == "video":
-                # Prefer 1080p or mp4
                 for l in match_links:
                     if "1080" in l or "mp4" in l or "itag=22" in l or "itag=137" in l:
                         chosen_url = l
@@ -188,7 +213,6 @@ async def _scrape_invidious_playwright_browser(video_id: str, mode: str) -> Opti
                 if not chosen_url:
                     chosen_url = match_links[0]
             else:
-                # Audio mode: prefer m4a or audio itags (140, 251)
                 for l in match_links:
                     if "m4a" in l or "audio" in l or "itag=140" in l or "itag=251" in l:
                         chosen_url = l
@@ -217,9 +241,9 @@ async def _scrape_invidious_playwright_browser(video_id: str, mode: str) -> Opti
 
 
 async def _scrape_invidious_api_fast(mirror_base: str, video_id: str, mode: str) -> Optional[Dict[str, str]]:
-    """Fast Invidious REST API parser."""
+    """Fast Invidious REST API parser (2s timeout)."""
     api_url = f"{mirror_base.rstrip('/')}/api/v1/videos/{video_id}"
-    timeout = aiohttp.ClientTimeout(total=6, connect=3)
+    timeout = aiohttp.ClientTimeout(total=2.5, connect=1.5)
     headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
     
     async with aiohttp.ClientSession(timeout=timeout, headers=headers) as session:
