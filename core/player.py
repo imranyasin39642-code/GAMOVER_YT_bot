@@ -41,7 +41,7 @@ async def download_file(url: str, dest_path: str, progress_callback=None, expect
                     if response.status != 200:
                         raise Exception(f"HTTP Status {response.status}")
 
-                    total_size = int(response.headers.get('content-length') or response.headers.get('x-content-length') or 0)
+                    total_size = response.content_length or int(response.headers.get('content-length') or response.headers.get('x-content-length') or 0)
                     if total_size == 0 and 'Content-Range' in response.headers:
                         try:
                             # Content-Range: bytes 0-14983948/14983949
@@ -1030,6 +1030,10 @@ class PlayerManager:
                     real_tot = dur_s * (200000 if mode == "video" else 40000)
                     if real_tot < 5 * 1024 * 1024:
                         real_tot = 12 * 1024 * 1024 if mode == "video" else 5 * 1024 * 1024
+
+                # Auto-expand real_tot dynamically if downloaded bytes exceed estimated real_tot!
+                if not tot and down >= real_tot:
+                    real_tot = int(down * 1.15)
 
                 real_pct = pct
                 if not pct or pct == 0:
