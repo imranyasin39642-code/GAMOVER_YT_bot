@@ -41,8 +41,26 @@ def build_effects_markup(selected_effect: str, chat_id: int, requested_by_id: in
     buttons.append([InlineKeyboardButton("BACK", callback_data=f"fx_back|{chat_id}|{requested_by_id}", style="primary")])
     return InlineKeyboardMarkup(buttons)
 
-def cmd_filter(cmds):
-    """Custom command filter matching /cmd, /cmd@botname, case-insensitively across groups and PMs."""
+def cmd_filter_group(cmds):
+    """Custom command filter matching /cmd, /cmd@botname ONLY in GROUPS/SUPERGROUPS."""
+    async def func(flt, client, message: Message):
+        if not message.chat or message.chat.type not in (enums.ChatType.GROUP, enums.ChatType.SUPERGROUP):
+            return False
+        text = (message.text or message.caption or "").strip()
+        if not text.startswith("/"):
+            return False
+        first_word = text.split()[0][1:]
+        if "@" in first_word:
+            cmd, bot_tag = first_word.split("@", 1)
+            bot_username = Config.BOT_USERNAME or (getattr(client, "me", None) and getattr(client.me, "username", "")) or ""
+            if bot_username and bot_tag.lower() != bot_username.lower():
+                return False
+            first_word = cmd
+        return first_word.lower() in [c.lower() for c in flt.cmds]
+    return filters.create(func, cmds=cmds)
+
+def cmd_filter_any(cmds):
+    """Custom command filter matching /cmd, /cmd@botname in BOTH PM and GROUPS."""
     async def func(flt, client, message: Message):
         text = (message.text or message.caption or "").strip()
         if not text.startswith("/"):
@@ -65,7 +83,7 @@ def register(app: Client):
             title = message.chat.title or "Group Chat"
             update_group_info(message.chat.id, title)
 
-    @app.on_message(cmd_filter(["start"]))
+    @app.on_message(cmd_filter_any(["start"]))
     async def start_command(client: Client, message: Message):
         bot_username = Config.BOT_USERNAME or (await client.get_me()).username
         user_name = message.from_user.first_name if message.from_user else "User"
@@ -168,7 +186,7 @@ async def send_search_status(client: Client, chat_id: int, query: str) -> Messag
         )
     )
 
-    @app.on_message(cmd_filter(["vd", "video"]))
+    @app.on_message(cmd_filter_group(["vd", "video"]))
     async def play_command(client: Client, message: Message):
         chat_id = message.chat.id
         parts = (message.text or message.caption or "").split(maxsplit=1)
@@ -190,7 +208,7 @@ async def send_search_status(client: Client, chat_id: int, query: str) -> Messag
         req_id = message.from_user.id if message.from_user else 0
         asyncio.create_task(player_manager.play(chat_id, query, mode="video", status_msg=status_msg, requested_by=req_name, requested_by_id=req_id))
 
-    @app.on_message(cmd_filter(["audio", "ad"]))
+    @app.on_message(cmd_filter_group(["audio", "ad"]))
     async def audio_command(client: Client, message: Message):
         chat_id = message.chat.id
         parts = (message.text or message.caption or "").split(maxsplit=1)
@@ -212,7 +230,7 @@ async def send_search_status(client: Client, chat_id: int, query: str) -> Messag
         req_id = message.from_user.id if message.from_user else 0
         asyncio.create_task(player_manager.play(chat_id, query, mode="audio", status_msg=status_msg, requested_by=req_name, requested_by_id=req_id))
 
-    @app.on_message(cmd_filter(["playlist", "list"]))
+    @app.on_message(cmd_filter_group(["playlist", "list"]))
     async def playlist_command(client: Client, message: Message):
         chat_id = message.chat.id
         parts = (message.text or message.caption or "").split(maxsplit=1)
@@ -262,7 +280,7 @@ async def send_search_status(client: Client, chat_id: int, query: str) -> Messag
             )
         )
 
-    @app.on_message(cmd_filter(["playlistaudio", "listaudio", "la"]))
+    @app.on_message(cmd_filter_group(["playlistaudio", "listaudio", "la"]))
     async def playlist_audio_command(client: Client, message: Message):
         chat_id = message.chat.id
         parts = (message.text or message.caption or "").split(maxsplit=1)
@@ -311,7 +329,7 @@ async def send_search_status(client: Client, chat_id: int, query: str) -> Messag
             )
         )
 
-    @app.on_message(filters.command(["plresume", "playlistresume", "resumeplaylist"]) & filters.group)
+    @app.on_message(cmd_filter_group(["plresume", "playlistresume", "resumeplaylist"]))
     async def pl_resume_command(client: Client, message: Message):
         chat_id = message.chat.id
         if not is_group_bot_active(chat_id):
@@ -361,7 +379,7 @@ async def send_search_status(client: Client, chat_id: int, query: str) -> Messag
             except Exception:
                 pass
 
-    @app.on_message(filters.command(["playlists", "myplaylists", "savedplaylists", "plhistory"]) & filters.group)
+    @app.on_message(cmd_filter_group(["playlists", "myplaylists", "savedplaylists", "plhistory"]))
     async def group_playlists_history_command(client: Client, message: Message):
         chat_id = message.chat.id
         if not is_group_bot_active(chat_id):
@@ -469,7 +487,7 @@ async def send_search_status(client: Client, chat_id: int, query: str) -> Messag
             status_msg=query.message
         ))
 
-    @app.on_message(cmd_filter(["pause", "cpause"]))
+    @app.on_message(cmd_filter_group(["pause", "cpause"]))
     async def pause_command(client: Client, message: Message):
         chat_id = message.chat.id
         user_id = message.from_user.id if message.from_user else 0
@@ -497,7 +515,7 @@ async def send_search_status(client: Client, chat_id: int, query: str) -> Messag
         else:
             await message.reply_text(make_card(f"{ROYAL_HEADER}⚠️ <b>Abhi kuch bhi play nahi ho raha!</b>"))
 
-    @app.on_message(cmd_filter(["resume", "cresume"]))
+    @app.on_message(cmd_filter_group(["resume", "cresume"]))
     async def resume_command(client: Client, message: Message):
         chat_id = message.chat.id
         user_id = message.from_user.id if message.from_user else 0
@@ -525,7 +543,7 @@ async def send_search_status(client: Client, chat_id: int, query: str) -> Messag
         else:
             await message.reply_text(make_card(f"{ROYAL_HEADER}⚠️ <b>Kuch bhi paused nahi hai!</b>"))
 
-    @app.on_message(cmd_filter(["skip", "cskip", "next", "cnext", "seek", "cseek"]))
+    @app.on_message(cmd_filter_group(["skip", "cskip", "next", "cnext", "seek", "cseek"]))
     async def skip_command(client: Client, message: Message):
         chat_id = message.chat.id
         user_id = message.from_user.id if message.from_user else 0
@@ -608,7 +626,7 @@ async def send_search_status(client: Client, chat_id: int, query: str) -> Messag
         if not skipped:
             await message.reply_text(make_card(f"{ROYAL_HEADER}⏹ <b>Queue empty! Playback stopped.</b>"))
 
-    @app.on_message(cmd_filter(["stop", "cstop", "end", "cend"]))
+    @app.on_message(cmd_filter_group(["stop", "cstop", "end", "cend"]))
     async def stop_command(client: Client, message: Message):
         chat_id = message.chat.id
         user_id = message.from_user.id if message.from_user else 0
@@ -638,7 +656,7 @@ async def send_search_status(client: Client, chat_id: int, query: str) -> Messag
         )
 
     # ── Owner-Only Approved Control Commands ────────────────────────────────
-    @app.on_message(filters.command(["approvecontrol", "approvedcontrol", "approvecontroll", "aprovedcontroll", "aprovedcontrol", "approve", "approved"]) & filters.group)
+    @app.on_message(cmd_filter_group(["approvecontrol", "approvedcontrol", "approvecontroll", "aprovedcontroll", "aprovedcontrol", "approve", "approved"]))
     async def approve_control_command(client: Client, message: Message):
         user_id = message.from_user.id if message.from_user else 0
         if user_id != Config.OWNER_ID and not is_sudo_user(user_id):
@@ -677,7 +695,7 @@ async def send_search_status(client: Client, chat_id: int, query: str) -> Messag
         )
         await message.reply_text(card)
 
-    @app.on_message(filters.command(["unapprovecontrol", "unapprovedcontrol", "unapprovecontroll", "unaprovedcontroll", "unaprovedcontrol", "unapprove", "unapproved"]) & filters.group)
+    @app.on_message(cmd_filter_group(["unapprovecontrol", "unapprovedcontrol", "unapprovecontroll", "unaprovedcontroll", "unaprovedcontrol", "unapprove", "unapproved"]))
     async def unapprove_control_command(client: Client, message: Message):
         user_id = message.from_user.id if message.from_user else 0
         if user_id != Config.OWNER_ID and not is_sudo_user(user_id):
@@ -716,7 +734,7 @@ async def send_search_status(client: Client, chat_id: int, query: str) -> Messag
         )
         await message.reply_text(card)
 
-    @app.on_message(filters.command(["approvedusers", "approvelist"]) & filters.group)
+    @app.on_message(cmd_filter_group(["approvedusers", "approvelist"]))
     async def approved_users_command(client: Client, message: Message):
         chat_id = message.chat.id
         from core.db import get_approved_users
@@ -800,7 +818,7 @@ async def send_search_status(client: Client, chat_id: int, query: str) -> Messag
         print("[System] Owner initiated process reload...")
         os._exit(0)
 
-    @app.on_message(cmd_filter(["shuffle", "cshuffle"]))
+    @app.on_message(cmd_filter_group(["shuffle", "cshuffle"]))
     async def shuffle_command(client: Client, message: Message):
         chat_id = message.chat.id
         ok = player_manager.shuffle_queue(chat_id)
@@ -820,7 +838,7 @@ async def send_search_status(client: Client, chat_id: int, query: str) -> Messag
                 )
             )
 
-    @app.on_message(cmd_filter(["autoplays", "automode", "ap", "autoplay"]))
+    @app.on_message(cmd_filter_group(["autoplays", "automode", "ap", "autoplay"]))
     async def autoplay_command(client: Client, message: Message):
         chat_id = message.chat.id
         user_name = message.from_user.first_name if message.from_user else "User"
@@ -850,7 +868,7 @@ async def send_search_status(client: Client, chat_id: int, query: str) -> Messag
                 )
             )
 
-    @app.on_message(cmd_filter(["queue", "cqueue", "recent"]))
+    @app.on_message(cmd_filter_group(["queue", "cqueue", "recent"]))
     async def queue_command(client: Client, message: Message):
         chat_id = message.chat.id
         if chat_id not in player_manager.active_calls:
