@@ -143,6 +143,7 @@ bot = Client(
     api_hash=Config.API_HASH,
     bot_token=Config.BOT_TOKEN,
     workdir=Config.PROJECT_ROOT,
+    in_memory=True,
     proxy=Config.get_proxy_config()
 )
 
@@ -152,6 +153,7 @@ assistant = Client(
     api_hash=Config.API_HASH,
     session_string=Config.STRING_SESSION,
     workdir=Config.PROJECT_ROOT,
+    in_memory=True,
     proxy=Config.get_proxy_config()
 )
 
