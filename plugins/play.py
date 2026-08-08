@@ -88,10 +88,8 @@ def register(app: Client):
                     InlineKeyboardButton("Add me to your group", url=f"https://t.me/{bot_username}?startgroup=true", style="success")
                 ],
                 [
-                    InlineKeyboardButton("Help", callback_data="welcome_help", style="primary")
-                ],
-                [
-                    InlineKeyboardButton("Owner 👑", url=Config.get_owner_url(), style="primary")
+                    InlineKeyboardButton("Help", callback_data="welcome_help", style="primary"),
+                    InlineKeyboardButton("Owner", url=Config.get_owner_url(), style="primary")
                 ],
                 [
                     InlineKeyboardButton("About", callback_data="welcome_about", style="danger")
@@ -1344,11 +1342,13 @@ async def send_search_status(client: Client, chat_id: int, query: str) -> Messag
                 f"Hey <b>{user_name}</b>,\n\n"
                 f"This is <b>GameOver YT Streamer</b> !\n\n"
                 f"A premium high-performance YouTube video & audio streaming bot.\n\n"
-                f"Developed and maintained by 👑 <b>GameOver Team</b>."
+                f"Developed and maintained by <b>GameOver Team</b>."
             )
             markup = InlineKeyboardMarkup([
-                [InlineKeyboardButton("Owner 👑", url=Config.get_owner_url(), style="primary")],
-                [InlineKeyboardButton("Back", callback_data="welcome_back", style="primary")]
+                [
+                    InlineKeyboardButton("Owner", url=Config.get_owner_url(), style="primary"),
+                    InlineKeyboardButton("Back", callback_data="welcome_back", style="primary")
+                ]
             ])
             await edit_styled(chat_id, about_text, markup, message_id=message_id, is_video=is_video)
             await query.answer()
@@ -1365,10 +1365,8 @@ async def send_search_status(client: Client, chat_id: int, query: str) -> Messag
                     InlineKeyboardButton("Add me to your group", url=f"https://t.me/{bot_username}?startgroup=true", style="success")
                 ],
                 [
-                    InlineKeyboardButton("Help", callback_data="welcome_help", style="primary")
-                ],
-                [
-                    InlineKeyboardButton("Owner 👑", url=Config.get_owner_url(), style="primary")
+                    InlineKeyboardButton("Help", callback_data="welcome_help", style="primary"),
+                    InlineKeyboardButton("Owner", url=Config.get_owner_url(), style="primary")
                 ],
                 [
                     InlineKeyboardButton("About", callback_data="welcome_about", style="danger")
