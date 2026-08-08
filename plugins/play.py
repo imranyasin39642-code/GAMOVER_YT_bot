@@ -175,7 +175,8 @@ async def send_search_status(client: Client, chat_id: int, query: str) -> Messag
         if message.chat.type not in (enums.ChatType.GROUP, enums.ChatType.SUPERGROUP):
             return
         chat_id = message.chat.id
-        query = " ".join(message.command[1:]).strip() if len(message.command) > 1 else ""
+        parts = (message.text or message.caption or "").split(maxsplit=1)
+        query = parts[1].strip() if len(parts) > 1 else ""
         print(f"[Command] Received /vd in group {chat_id} | Query: '{query}'")
 
         if not query:
@@ -199,7 +200,8 @@ async def send_search_status(client: Client, chat_id: int, query: str) -> Messag
         if message.chat.type not in (enums.ChatType.GROUP, enums.ChatType.SUPERGROUP):
             return
         chat_id = message.chat.id
-        query = " ".join(message.command[1:]).strip() if len(message.command) > 1 else ""
+        parts = (message.text or message.caption or "").split(maxsplit=1)
+        query = parts[1].strip() if len(parts) > 1 else ""
         print(f"[Command] Received /ad in group {chat_id} | Query: '{query}'")
 
         if not query:
@@ -223,7 +225,8 @@ async def send_search_status(client: Client, chat_id: int, query: str) -> Messag
         if message.chat.type not in (enums.ChatType.GROUP, enums.ChatType.SUPERGROUP):
             return
         chat_id = message.chat.id
-        query = " ".join(message.command[1:]).strip() if len(message.command) > 1 else ""
+        parts = (message.text or message.caption or "").split(maxsplit=1)
+        query = parts[1].strip() if len(parts) > 1 else ""
         print(f"[Command] Received /list in group {chat_id} | Query: '{query}'")
 
         if query:
@@ -275,7 +278,8 @@ async def send_search_status(client: Client, chat_id: int, query: str) -> Messag
         if message.chat.type not in (enums.ChatType.GROUP, enums.ChatType.SUPERGROUP):
             return
         chat_id = message.chat.id
-        query = " ".join(message.command[1:]).strip() if len(message.command) > 1 else ""
+        parts = (message.text or message.caption or "").split(maxsplit=1)
+        query = parts[1].strip() if len(parts) > 1 else ""
         print(f"[Command] Received /la in group {chat_id} | Query: '{query}'")
 
         if query:
