@@ -44,14 +44,8 @@ def build_effects_markup(selected_effect: str, chat_id: int, requested_by_id: in
 def cmd(cmds):
     if isinstance(cmds, str):
         cmds = [cmds]
-    bot_name = Config.BOT_USERNAME or "Gameover_Music_bot"
-    all_cmds = []
-    for c in cmds:
-        c_clean = c.lstrip("/")
-        all_cmds.append(c_clean.lower())
-        all_cmds.append(f"{c_clean.lower()}@{bot_name.lower()}")
-        all_cmds.append(f"{c_clean.lower()}@{bot_name}")
-    return filters.command(all_cmds, prefixes=["/", "!", "."])
+    clean_cmds = [c.lstrip("/").lower() for c in cmds]
+    return filters.command(clean_cmds, prefixes=["/", "!", "."])
 
 def register(app: Client):
 
@@ -60,6 +54,7 @@ def register(app: Client):
         if message.chat and message.chat.id:
             title = message.chat.title or "Group Chat"
             update_group_info(message.chat.id, title)
+        message.continue_propagation()
 
     @app.on_message(cmd(["start"]))
     async def start_command(client: Client, message: Message):
