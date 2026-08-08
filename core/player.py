@@ -1142,9 +1142,8 @@ class PlayerManager:
         print(f"[Player] Initializing stream with Target Quality: {q_pref} | FPS: {fps_pref}")
         
 
-        # PyTgCalls v3 dev: pass NO custom ffmpeg_parameters to avoid crash/immediate stream end
-        # AudioQuality.STUDIO already sets 48kHz, 128kbps stereo — best quality without filters
-        # Ensure media file has a valid audio track before PyTgCalls starts streaming
+        # Studio Master Audio Equalization & Loudness Normalization
+        # -af loudnorm=I=-16:TP=-1.5:LRA=11,volume=1.25 gives crystal clear vocals and studio cinema audio
         local_path = ensure_audio_track(local_path)
 
         stream = SeekableMediaStream(
@@ -1152,6 +1151,7 @@ class PlayerManager:
             audio_path=None,
             video_parameters=vid_params,
             audio_parameters=AudioQuality.STUDIO,
+            ffmpeg_parameters="-af loudnorm=I=-16:TP=-1.5:LRA=11,volume=1.25",
             video_flags=MediaStream.Flags.REQUIRED if mode == "video" else MediaStream.Flags.IGNORE,
             audio_flags=MediaStream.Flags.REQUIRED,
         )
@@ -1193,6 +1193,7 @@ class PlayerManager:
                             audio_path=None,
                             video_parameters=vid_params,
                             audio_parameters=AudioQuality.STUDIO,
+                            ffmpeg_parameters="-af loudnorm=I=-16:TP=-1.5:LRA=11,volume=1.25",
                             video_flags=MediaStream.Flags.IGNORE,
                             audio_flags=MediaStream.Flags.REQUIRED,
                         )
