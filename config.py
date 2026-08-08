@@ -9,8 +9,18 @@ class Config:
     BOT_TOKEN: str = os.getenv("BOT_TOKEN", "")
     STRING_SESSION: str = os.getenv("STRING_SESSION", "")
     OWNER_ID: int = int(os.getenv("OWNER_ID", 0))
+    OWNER_USERNAME: str = os.getenv("OWNER_USERNAME", "")
     LOG_GROUP_ID: int = int(os.getenv("LOG_GROUP_ID", "-1003975646434"))
     LOG_CHANNEL_LINK: str = os.getenv("LOG_CHANNEL_LINK", "https://t.me/+aRRNo19DcGE3MzQ0")
+
+    @classmethod
+    def get_owner_url(cls) -> str:
+        if cls.OWNER_USERNAME:
+            uname = cls.OWNER_USERNAME.replace("@", "").strip()
+            return f"https://t.me/{uname}"
+        if cls.OWNER_ID:
+            return f"tg://user?id={cls.OWNER_ID}"
+        return "https://t.me"
 
     DOWNLOADS_DIR: str = os.getenv("DOWNLOADS_DIR", "downloads")
     PROJECT_ROOT: str = os.path.dirname(os.path.abspath(__file__))

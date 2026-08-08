@@ -78,6 +78,31 @@ async def search_youtube(query: str) -> Optional[Dict[str, str]]:
     return None
 
 
+async def get_youtube_recommendations(last_title: str, last_video_id: str = "") -> Optional[Dict[str, str]]:
+    """Fetch next related song recommendation from YouTube for Auto-Play."""
+    if last_video_id:
+        try:
+            connector = get_doh_connector()
+            headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
+            async with aiohttp.ClientSession(connector=connector) as session:
+                async with session.get(f"https://www.youtube.com/watch?v={last_video_id}", headers=headers, timeout=aiohttp.ClientTimeout(total=4)) as resp:
+                    if resp.status == 200:
+                        html = await resp.text()
+                        matches = re.findall(r'"videoId":"([a-zA-Z0-9_-]{11})"', html)
+                        for v_id in matches:
+                            if v_id != last_video_id:
+                                # Find title for recommended video_id
+                                title_match = re.search(r'"videoId":"' + re.escape(v_id) + r'".*?"title":\{"runs":\[\{"text":"([^"]+)"', html)
+                                title = title_match.group(1) if title_match else "Related Track"
+                                return {"video_id": v_id, "url": f"https://www.youtube.com/watch?v={v_id}", "title": title}
+        except Exception as e:
+            print(f"[AutoPlay] Recommendation parse note: {e}")
+
+    # Fallback search query
+    query = f"{last_title} mix" if last_title else "top trending music"
+    return await search_youtube(query)
+
+
 # Multi-layer scraper sequence for guaranteed 100% bypass of YouTube bot/cookie checks
 SCRAPING_SITES = ["gameover_api", "ytdlp", "cobalt", "invidious", "piped", "yt5s", "yt1s", "y2mate", "9xbuddy", "ytmp3"]
 
@@ -94,35 +119,24 @@ async def resolve_query_to_url(input_query: str) -> Optional[str]:
 
 async def resolve_stream_url(input_query: str, mode: str = "video") -> Optional[Dict[str, str]]:
     """
-    Tier 1 & Tier 2 Stream Resolver:
-    1. Direct Link Bypass: If input is a direct YouTube URL, parse video_id locally and call Tier 2 Playwright scraper IMMEDIATELY! Skip Tier 1 API completely!
-    2. Text Search Query: Call Tier 1 API (nskmedia.net/api/search) first to resolve video_id, then call Tier 2 Playwright scraper.
+    Direct Fast Stream Resolver (Zero dead API delays):
+    1. Direct Link Bypass: If input is a YouTube URL, parse video_id locally and call Playwright scraper IMMEDIATELY!
+    2. Text Search Query: Use fast internal 0.8s HTML search to resolve video_id, then call Playwright scraper.
     """
     from core.playwright_scraper import extract_stream_playwright
 
     video_id = extract_video_id(input_query)
     
-    # Requirement #1: Direct Link Bypass (Speed Optimization)
+    # Direct Link Bypass (Speed Optimization)
     if video_id:
-        print(f"[Scraper/Bypass] Direct YouTube link detected ({video_id}). Bypassing Tier 1 API -> Executing Tier 2 Playwright Scraper...")
+        print(f"[Scraper/Bypass] Direct YouTube link detected ({video_id}). Executing Playwright Scraper...")
         res = await extract_stream_playwright(video_id, mode)
         if res:
             return res
-        print(f"[Scraper/Bypass] Direct link resolution complete for {video_id}.")
         return None
 
-    # Text Search Query: Use Tier 1 nskmedia.net Search API
-    print(f"[Scraper/Tier1] Text query detected: '{input_query}'. Requesting search from nskmedia.net API...")
-    search_res = await _search_nskmedia_api(input_query)
-    if search_res and search_res.get("video_id"):
-        v_id = search_res["video_id"]
-        res = await extract_stream_playwright(v_id, mode)
-        if res:
-            if not res.get("title") or res.get("title") == "YouTube Stream":
-                res["title"] = search_res.get("title", "YouTube Stream")
-            return res
-
-    # Fallback HTML search if Tier 1 API fails
+    # Text Search Query: Fast HTML search in 0.8s (Zero Dead API Delays!)
+    print(f"[Scraper/FastSearch] Resolving search query: '{input_query}'...")
     search_fallback = await search_youtube(input_query)
     if search_fallback and search_fallback.get("video_id"):
         v_id = search_fallback["video_id"]
@@ -131,56 +145,6 @@ async def resolve_stream_url(input_query: str, mode: str = "video") -> Optional[
             res["title"] = search_fallback.get("title", res.get("title"))
             return res
 
-    return None
-
-
-async def _search_nskmedia_api(query: str) -> Optional[Dict[str, str]]:
-    """Hits nskmedia.net API search endpoint."""
-    import os
-    api_key = os.getenv("GAMEOVER_API_KEY", "GAMEOVER_SECRET_123")
-    url = f"https://nskmedia.net/api/search?query={urllib.parse.quote(query)}&limit=5&api_key={api_key}"
-    try:
-        async with aiohttp.ClientSession() as session:
-            async with session.get(url, ssl=False, timeout=aiohttp.ClientTimeout(total=5)) as resp:
-                if resp.status == 200:
-                    data = await resp.json()
-                    results = data.get("results") or data.get("videos") or []
-                    if results:
-                        item = results[0]
-                        v_id = item.get("video_id") or item.get("id")
-                        if v_id:
-                            return {
-                                "video_id": v_id,
-                                "title": item.get("title", query),
-                                "thumbnail": item.get("thumbnail") or f"https://i.ytimg.com/vi/{v_id}/hqdefault.jpg"
-                            }
-    except Exception as e:
-        print(f"[Tier1/Search] nskmedia search note: {e}")
-    return None
-
-
-async def extract_playlist_info(playlist_url: str) -> Optional[Dict]:
-    """
-    Hits nskmedia.net API playlist endpoint to fetch up to 50 video IDs in 2-3 seconds.
-    """
-    import os
-    api_key = os.getenv("GAMEOVER_API_KEY", "GAMEOVER_SECRET_123")
-    url = f"https://nskmedia.net/api/playlist?url={urllib.parse.quote(playlist_url)}&limit=50&api_key={api_key}"
-    try:
-        async with aiohttp.ClientSession() as session:
-            async with session.get(url, ssl=False, timeout=aiohttp.ClientTimeout(total=8)) as resp:
-                if resp.status == 200:
-                    data = await resp.json()
-                    videos = data.get("videos") or []
-                    title = data.get("playlist_title") or "YouTube Playlist"
-                    print(f"[Tier1/Playlist] nskmedia returned {len(videos)} tracks for playlist '{title}'")
-                    return {
-                        "title": title,
-                        "videos": videos
-                    }
-    except Exception as e:
-        print(f"[Tier1/Playlist] nskmedia playlist note: {e}")
-    return None
     return None
 
 

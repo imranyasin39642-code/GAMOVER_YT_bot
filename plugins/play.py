@@ -62,42 +62,97 @@ def register(app: Client):
                 first_name=message.from_user.first_name or ""
             )
         
-        from bot import make_card
-        welcome_text = make_card(
-            f"👑 <b>ɢᴀᴍᴇᴏᴠᴇʀ ʏᴛ sᴛʀᴇᴀᴍᴇʀ</b> 👑\n\n"
-            f"🔥 <b>WELCOME, {user_name.upper()}!</b> 🔥\n\n"
-            f"I AM 🎬 <b>GameOver YT Streamer</b>, A PREMIUM HIGH-PERFORMANCE YOUTUBE VIDEO AND AUDIO STREAMING BOT.\n\n"
-            f"⚡ <b>SUPPORTED SOURCES:</b>\n"
-            f"• <b>YOUTUBE</b> (LOCKED 720P 60 FPS)\n\n"
-            f"CLICK THE BUTTONS BELOW TO EXPLORE COMMANDS!"
-        )
+        is_group = message.chat.type in (enums.ChatType.GROUP, enums.ChatType.SUPERGROUP)
         
-        buttons = InlineKeyboardMarkup([
-            [
-                InlineKeyboardButton("➕ ADD ME TO YOUR GROUP", url=f"https://t.me/{bot_username}?startgroup=true", style="success")
-            ],
-            [
-                InlineKeyboardButton("📚 HELP MENU", callback_data="welcome_help", style="primary"),
-                InlineKeyboardButton("ℹ️ ABOUT BOT", callback_data="welcome_about", style="primary")
-            ]
-        ])
+        if is_group:
+            welcome_text = (
+                f"Hey <b>{user_name}</b>,\n"
+                f"This is <b>GameOver YT Streamer</b> !\n\n"
+                f"A music player bot with some awesome and useful features.\n\n"
+                f"<i>Click on the button below to add me to your group!</i>"
+            )
+            buttons = InlineKeyboardMarkup([
+                [
+                    InlineKeyboardButton("Add me to your group", url=f"https://t.me/{bot_username}?startgroup=true", style="success")
+                ]
+            ])
+        else:
+            welcome_text = (
+                f"Hey <b>{user_name}</b>,\n"
+                f"This is <b>GameOver YT Streamer</b> !\n\n"
+                f"A music player bot with some awesome and useful features.\n\n"
+                f"<i>Click on the buttons below to get information about my commands.</i>"
+            )
+            buttons = InlineKeyboardMarkup([
+                [
+                    InlineKeyboardButton("Add me to your group", url=f"https://t.me/{bot_username}?startgroup=true", style="success")
+                ],
+                [
+                    InlineKeyboardButton("Help", callback_data="welcome_help", style="primary")
+                ],
+                [
+                    InlineKeyboardButton("Owner 👑", url=Config.get_owner_url(), style="primary")
+                ],
+                [
+                    InlineKeyboardButton("About", callback_data="welcome_about", style="danger")
+                ]
+            ])
         
-        # Send start.mp4 video if it exists in the root folder, else fallback to text
         base_dir = Config.PROJECT_ROOT
-        video_path = os.path.join(base_dir, "start.mp4")
-        if not os.path.exists(video_path):
-            video_path = os.path.join(base_dir, "Start.mp4")
+        media_path = None
+        for fn in ["start.mp4", "Start.mp4", "start.jpg", "Start.jpg", "start.png", "Start.png", "start.jpeg"]:
+            p = os.path.join(base_dir, fn)
+            if os.path.exists(p):
+                media_path = p
+                break
             
+        if media_path and (media_path.endswith(".jpg") or media_path.endswith(".png") or media_path.endswith(".jpeg")):
+            try:
+                await client.send_photo(
+                    chat_id=message.chat.id,
+                    photo=media_path,
+                    caption=welcome_text,
+                    reply_markup=buttons,
+                    parse_mode=enums.ParseMode.HTML
+                )
+                return
+            except Exception as e:
+                print(f"[Start] Error sending start photo: {e}")
+
         from core.media_helper import send_cached_video
         await send_cached_video(
             client=client,
             chat_id=message.chat.id,
-            video_path=video_path,
+            video_path=media_path or os.path.join(base_dir, "start.mp4"),
             cache_key_prefix="start_video",
             caption=welcome_text,
             reply_markup=buttons,
             parse_mode=enums.ParseMode.HTML
         )
+
+async def send_search_status(client: Client, chat_id: int, query: str) -> Message:
+    """Send animated searching sticker or clean searching status card."""
+    # List of high quality Telegram animated searching sticker IDs
+    sticker_ids = [
+        "CAACAgUAAxkBAAEC3_Fl89wzS-Wk4Y7QG...", 
+        "CAACAgIAAxkBAAIFNmW0x0_..."
+    ]
+    for st in sticker_ids:
+        try:
+            return await client.send_sticker(chat_id, st)
+        except Exception:
+            pass
+            
+    # Fallback to elegant searching card
+    return await client.send_message(
+        chat_id,
+        make_card(
+            f"👑 <b>ɢᴀᴍᴇᴏᴠᴇʀ ʏᴛ sᴛʀᴇᴀᴍᴇʀ</b> 👑\n\n"
+            f"🔍 <b>S E A R C H I N G   Y O U T U B E...</b>\n"
+            f"📌 <b>Track:</b> <code>{query}</code>\n\n"
+            f"⚡ <i>Resolving media stream in 2 seconds...</i>"
+        )
+    )
 
     @app.on_message(filters.command(["vd", "video"]) & filters.group)
     async def play_command(client: Client, message: Message):
@@ -115,8 +170,8 @@ def register(app: Client):
             )
             return
 
-        query = " ".join(message.command[1:])
-        status_msg = await message.reply_text(make_card(f"{ROYAL_HEADER}⏳ <b>Processing... Please wait!</b>"))
+        query = " ".join(message.command[1:]).strip()
+        status_msg = await send_search_status(client, chat_id, query)
         
         req_name = message.from_user.first_name if message.from_user else "User"
         req_id = message.from_user.id if message.from_user else 0
@@ -139,8 +194,8 @@ def register(app: Client):
             )
             return
 
-        query = " ".join(message.command[1:])
-        status_msg = await message.reply_text(make_card(f"{ROYAL_HEADER}⏳ <b>Processing... Please wait!</b>"))
+        query = " ".join(message.command[1:]).strip()
+        status_msg = await send_search_status(client, chat_id, query)
         
         req_name = message.from_user.first_name if message.from_user else "User"
         req_id = message.from_user.id if message.from_user else 0
@@ -630,14 +685,14 @@ def register(app: Client):
             await message.reply_text(make_card(f"{ROYAL_HEADER}👥 <b>Iss group me koi approved control user nahi hai!</b>"))
             return
 
-        import datetime
+        from datetime import datetime
         lines = []
         buttons_list = []
         for i, u in enumerate(users, start=1):
             uid = u["user_id"]
             uname = u["user_name"] or f"User {uid}"
             by_id = u.get("approved_by", 0)
-            t_str = datetime.datetime.fromtimestamp(u.get("added_at", time.time())).strftime("%d %b %Y, %I:%M %p")
+            t_str = datetime.fromtimestamp(u.get("added_at", time.time())).strftime("%d %b %Y, %I:%M %p")
             lines.append(
                 f"<b>{i}.</b> <a href=\"tg://user?id={uid}\">{uname}</a> [<code>{uid}</code>]\n"
                 f"   📅 <i>Approved On: {t_str}</i>\n"
@@ -703,6 +758,62 @@ def register(app: Client):
         print("[System] Owner initiated process reload...")
         os._exit(0)
 
+    @app.on_message(filters.command(["shuffle", "cshuffle"]) & filters.group)
+    async def shuffle_command(client: Client, message: Message):
+        chat_id = message.chat.id
+        if not is_group_bot_active(chat_id):
+            return
+        
+        ok = player_manager.shuffle_queue(chat_id)
+        if ok:
+            next_t = player_manager.queues[chat_id][0]['title']
+            await message.reply_text(
+                make_card(
+                    f"{ROYAL_HEADER}🔀 <b>UPCOMING QUEUE SHUFFLED!</b>\n\n"
+                    f"⏭ <b>Next Track:</b> <code>{next_t}</code>\n"
+                    f"📦 Total queued: <code>{len(player_manager.queues[chat_id])} tracks</code>"
+                )
+            )
+        else:
+            await message.reply_text(
+                make_card(
+                    f"{ROYAL_HEADER}⚠️ <b>Queue me minimum 2 songs hone chahiye shuffle karne ke liye!</b>"
+                )
+            )
+
+    @app.on_message(filters.command(["autoplays", "automode", "ap", "autoplay"]) & filters.group)
+    async def autoplay_command(client: Client, message: Message):
+        chat_id = message.chat.id
+        if not is_group_bot_active(chat_id):
+            return
+        
+        user_name = message.from_user.first_name if message.from_user else "User"
+        user_id = message.from_user.id if message.from_user else 0
+        user_link = f"<a href=\"tg://user?id={user_id}\">{user_name}</a>" if user_id else f"<b>{user_name}</b>"
+
+        if chat_id in player_manager.autoplay_chats:
+            player_manager.autoplay_chats.remove(chat_id)
+            await message.reply_text(
+                make_card(
+                    f"{ROYAL_HEADER}"
+                    f"<b>Smart Auto-Play Mode Disabled!</b>\n\n"
+                    f"• <b>Status:</b> <code>OFF</code>\n"
+                    f"• <b>Toggled By:</b> {user_link}\n\n"
+                    f"<i>Playback will stop when queue finishes.</i>"
+                )
+            )
+        else:
+            player_manager.autoplay_chats.add(chat_id)
+            await message.reply_text(
+                make_card(
+                    f"{ROYAL_HEADER}"
+                    f"<b>Smart Auto-Play Mode Enabled!</b>\n\n"
+                    f"• <b>Status:</b> <code>ON</code>\n"
+                    f"• <b>Toggled By:</b> {user_link}\n\n"
+                    f"<i>YouTube recommendations will automatically play when queue finishes.</i>"
+                )
+            )
+
     @app.on_message(filters.command(["queue", "recent"]) & filters.group)
     async def queue_command(client: Client, message: Message):
         chat_id = message.chat.id
@@ -716,8 +827,10 @@ def register(app: Client):
             
         current_title = player_manager.stream_title.get(chat_id, "Unknown Title")
         queued_songs = player_manager.queues.get(chat_id, [])
+        ap_status = "ON" if chat_id in player_manager.autoplay_chats else "OFF"
         
-        text = f"{ROYAL_HEADER}🎵 <b>Now Playing:</b>\n• <code>{current_title}</code>\n\n"
+        text = f"{ROYAL_HEADER}<b>Now Playing:</b>\n• <code>{current_title}</code>\n\n"
+        text += f"<b>Auto-Play:</b> <code>{ap_status}</code>\n\n"
         
         if queued_songs:
             q_lines = []
@@ -726,45 +839,93 @@ def register(app: Client):
                 t_short = (t[:32] + "...") if len(t) > 32 else t
                 q_lines.append(f"{i}. {t_short}")
             q_str = "\n".join(q_lines)
-            text += f"📣 <b>Upcoming Queue:</b>\n<blockquote expandable>{q_str}</blockquote>"
+            text += f"<b>Upcoming Queue:</b>\n<blockquote expandable>{q_str}</blockquote>"
         else:
-            text += "📣 <b>Queue is empty!</b>"
+            text += "<b>Queue is empty!</b>"
             
-        await message.reply_text(make_card(text))
+        buttons = InlineKeyboardMarkup([
+            [
+                InlineKeyboardButton("SHUFFLE QUEUE", callback_data=f"cb_shuffle|{chat_id}", style="success"),
+                InlineKeyboardButton(f"AUTOPLAY ({'ON' if chat_id in player_manager.autoplay_chats else 'OFF'})", callback_data=f"cb_autoplay|{chat_id}", style="primary")
+            ],
+            [InlineKeyboardButton("CLOSE", callback_data="play_close", style="danger")]
+        ])
+        await message.reply_text(make_card(text), reply_markup=buttons)
 
     @app.on_message(filters.command(["help", "helpmenu"]))
     async def help_command(client: Client, message: Message):
-        bot_username = Config.BOT_USERNAME or (await client.get_me()).username
-        help_card = make_card(
-            f"👑 <b>ɢᴀᴍᴇᴏᴠᴇʀ ʏᴛ sᴛʀᴇᴀᴍᴇʀ</b> 👑\n"
-            f"📚 <b>HELP & COMMANDS GUIDE</b>\n\n"
-            f"🎬 <b>VIDEO PLAYBACK:</b>\n"
-            f"• <code>/vd</code> <i>[song/link]</i> - Stream Video (720p 60fps)\n"
-            f"• <code>/video</code> <i>[song/link]</i> - Stream Video\n\n"
-            f"🎵 <b>AUDIO PLAYBACK:</b>\n"
-            f"• <code>/ad</code> <i>[song/link]</i> - Stream HQ Studio Audio\n"
-            f"• <code>/audio</code> <i>[song/link]</i> - Stream Audio\n\n"
-            f"📹 <b>VIDEO PLAYLIST:</b>\n"
-            f"• <code>/list</code> <i>[playlist link]</i> - Play Video Playlist\n"
-            f"• <code>/playlist</code> <i>[playlist link]</i> - Play Video Playlist\n\n"
-            f"🎧 <b>AUDIO PLAYLIST:</b>\n"
-            f"• <code>/la</code> <i>[playlist link]</i> - Play Audio Playlist\n"
-            f"• <code>/listaudio</code> <i>[playlist link]</i> - Play Audio Playlist\n\n"
-            f"🔄 <b>PLAYLIST RESUME:</b>\n"
-            f"• <code>/plresume</code> - Resume saved playlist from last song\n"
-            f"• <code>/playlistresume</code> - Resume playlist progress\n\n"
-            f"🎮 <b>CONTROLS & QUEUE:</b>\n"
-            f"• <code>/pause</code> - Pause the active stream\n"
-            f"• <code>/resume</code> - Resume the paused stream\n"
-            f"• <code>/skip</code> - Skip to next queued track\n"
-            f"• <code>/stop</code> - Stop playback & leave voice chat\n"
-            f"• <code>/queue</code> - View upcoming queued tracks"
+        help_text = (
+            f"Click the buttons below to get information about my commands.\n\n"
+            f"<i>Note: All commands can be used with /</i>"
         )
+        grid_buttons = InlineKeyboardMarkup([
+            [
+                InlineKeyboardButton("Admins", callback_data="help_cat|admins", style="primary"),
+                InlineKeyboardButton("Auth", callback_data="help_cat|auth", style="primary"),
+                InlineKeyboardButton("Blacklist", callback_data="help_cat|blacklist", style="primary")
+            ],
+            [
+                InlineKeyboardButton("Language", callback_data="help_cat|language", style="primary"),
+                InlineKeyboardButton("Ping", callback_data="help_cat|ping", style="primary"),
+                InlineKeyboardButton("Play", callback_data="help_cat|play", style="primary")
+            ],
+            [
+                InlineKeyboardButton("Queue", callback_data="help_cat|queue", style="primary"),
+                InlineKeyboardButton("Stats", callback_data="help_cat|stats", style="primary"),
+                InlineKeyboardButton("Sudoers", callback_data="help_cat|sudoers", style="primary")
+            ],
+            [
+                InlineKeyboardButton("Close", callback_data="play_close", style="danger")
+            ]
+        ])
+        await message.reply_text(help_text, reply_markup=grid_buttons)
+
+    @app.on_callback_query(filters.regex(r"^cb_"))
+    async def queue_extra_callbacks(client: Client, query: CallbackQuery):
+        parts = query.data.split("|")
+        action = parts[0]
+        chat_id = int(parts[1])
+
+        if action == "cb_shuffle":
+            ok = player_manager.shuffle_queue(chat_id)
+            if ok:
+                await query.answer("🔀 Queue Shuffled successfully!", show_alert=True)
+            else:
+                await query.answer("⚠️ Minimum 2 queued songs needed to shuffle!", show_alert=True)
+
+        elif action == "cb_autoplay":
+            if chat_id in player_manager.autoplay_chats:
+                player_manager.autoplay_chats.remove(chat_id)
+                await query.answer("🛑 Auto-Play Disabled!", show_alert=True)
+            else:
+                player_manager.autoplay_chats.add(chat_id)
+                await query.answer("🔀 Auto-Play Enabled! YouTube recommendations will auto-play.", show_alert=True)
+
+        current_title = player_manager.stream_title.get(chat_id, "Unknown Title")
+        queued_songs = player_manager.queues.get(chat_id, [])
+        ap_status = "ENABLED 🟢" if chat_id in player_manager.autoplay_chats else "DISABLED 🔴"
+        
+        text = f"{ROYAL_HEADER}🎵 <b>Now Playing:</b>\n• <code>{current_title}</code>\n\n"
+        text += f"🔀 <b>Auto-Play:</b> <code>{ap_status}</code>\n\n"
+        
+        if queued_songs:
+            q_lines = [f"{i}. {(s['title'][:32] + '...') if len(s['title']) > 32 else s['title']}" for i, s in enumerate(queued_songs, start=1)]
+            text += f"📣 <b>Upcoming Queue:</b>\n<blockquote expandable>{'\n'.join(q_lines)}</blockquote>"
+        else:
+            text += "📣 <b>Queue is empty!</b>"
+            
         buttons = InlineKeyboardMarkup([
-            [InlineKeyboardButton("➕ ADD ME TO YOUR GROUP", url=f"https://t.me/{bot_username}?startgroup=true", style="success")],
+            [
+                InlineKeyboardButton("🔀 SHUFFLE QUEUE", callback_data=f"cb_shuffle|{chat_id}", style="success"),
+                InlineKeyboardButton(f"🔄 AUTOPLAY ({'ON' if chat_id in player_manager.autoplay_chats else 'OFF'})", callback_data=f"cb_autoplay|{chat_id}", style="primary")
+            ],
             [InlineKeyboardButton("🗑 CLOSE", callback_data="play_close", style="danger")]
         ])
-        await message.reply_text(help_card, reply_markup=buttons)
+        try:
+            from bot import edit_styled
+            await edit_styled(chat_id=chat_id, text=text, markup=buttons, message_id=query.message.id)
+        except Exception:
+            pass
 
     @app.on_callback_query(filters.regex(r"^play_"))
     async def player_callbacks(client: Client, query: CallbackQuery):
@@ -1018,7 +1179,7 @@ def register(app: Client):
                 status_msg=query.message
             ))
 
-    @app.on_callback_query(filters.regex(r"^welcome_"))
+    @app.on_callback_query(filters.regex(r"^(welcome_|help_cat\|)"))
     async def welcome_callbacks(client: Client, query: CallbackQuery):
         data = query.data
         chat_id = query.message.chat.id
@@ -1031,70 +1192,138 @@ def register(app: Client):
         
         if data == "welcome_help":
             help_text = (
-                f"👑 <b>ɢᴀᴍᴇᴏᴠᴇʀ ʏᴛ sᴛʀᴇᴀᴍᴇʀ</b> 👑\n"
-                f"📚 <b>HELP & COMMANDS GUIDE</b>\n\n"
-                f"🎬 <b>VIDEO PLAYBACK:</b>\n"
-                f"• <code>/vd</code> <i>[song/link]</i> - Stream Video (720p 60fps)\n"
-                f"• <code>/video</code> <i>[song/link]</i> - Stream Video\n\n"
-                f"🎵 <b>AUDIO PLAYBACK:</b>\n"
-                f"• <code>/ad</code> <i>[song/link]</i> - Stream HQ Studio Audio\n"
-                f"• <code>/audio</code> <i>[song/link]</i> - Stream Audio\n\n"
-                f"📹 <b>VIDEO PLAYLIST:</b>\n"
-                f"• <code>/list</code> <i>[playlist link]</i> - Play Video Playlist\n"
-                f"• <code>/playlist</code> <i>[playlist link]</i> - Play Video Playlist\n\n"
-                f"🎧 <b>AUDIO PLAYLIST:</b>\n"
-                f"• <code>/la</code> <i>[playlist link]</i> - Play Audio Playlist\n"
-                f"• <code>/listaudio</code> <i>[playlist link]</i> - Play Audio Playlist\n\n"
-                f"🔄 <b>PLAYLIST RESUME:</b>\n"
-                f"• <code>/plresume</code> - Resume saved playlist from last song\n"
-                f"• <code>/playlistresume</code> - Resume playlist progress\n\n"
-                f"🎮 <b>CONTROLS & QUEUE:</b>\n"
-                f"• <code>/pause</code> - Pause the active stream\n"
-                f"• <code>/resume</code> - Resume the paused stream\n"
-                f"• <code>/skip</code> - Skip to next queued track\n"
-                f"• <code>/skip 10s</code> / <code>/seek 1m</code> - Seek current stream forward\n"
-                f"• <code>/stop</code> - Stop playback & leave voice chat\n"
-                f"• <code>/queue</code> - View upcoming queued tracks\n\n"
-                f"⚙️ <b>ADMIN COMMANDS:</b>\n"
-                f"• <code>/welcome on</code> - Enable welcome card in group\n"
-                f"• <code>/welcome off</code> - Disable welcome card in group\n"
-                f"• <code>/start on</code> - Enable start intro card in group\n"
-                f"• <code>/start off</code> - Disable start intro card in group"
+                f"Click the buttons below to get information about my commands.\n\n"
+                f"<i>Note: All commands can be used with /</i>"
             )
-            markup = InlineKeyboardMarkup([[
-                InlineKeyboardButton("🔙 BACK", callback_data="welcome_back", style="primary")
-            ]])
-            await edit_styled(chat_id, help_text, markup, message_id=message_id, is_video=is_video)
+            grid_buttons = InlineKeyboardMarkup([
+                [
+                    InlineKeyboardButton("Admins", callback_data="help_cat|admins", style="primary"),
+                    InlineKeyboardButton("Auth", callback_data="help_cat|auth", style="primary"),
+                    InlineKeyboardButton("Blacklist", callback_data="help_cat|blacklist", style="primary")
+                ],
+                [
+                    InlineKeyboardButton("Language", callback_data="help_cat|language", style="primary"),
+                    InlineKeyboardButton("Ping", callback_data="help_cat|ping", style="primary"),
+                    InlineKeyboardButton("Play", callback_data="help_cat|play", style="primary")
+                ],
+                [
+                    InlineKeyboardButton("Queue", callback_data="help_cat|queue", style="primary"),
+                    InlineKeyboardButton("Stats", callback_data="help_cat|stats", style="primary"),
+                    InlineKeyboardButton("Sudoers", callback_data="help_cat|sudoers", style="primary")
+                ],
+                [
+                    InlineKeyboardButton("Back", callback_data="welcome_back", style="primary")
+                ]
+            ])
+            await edit_styled(chat_id, help_text, grid_buttons, message_id=message_id, is_video=is_video)
             await query.answer()
-            
+
+        elif data.startswith("help_cat|"):
+            cat = data.split("|")[1]
+            cat_map = {
+                "admins": (
+                    "👑 <b>ADMIN COMMANDS:</b>\n\n"
+                    "• <code>/pause</code> - Pause playback\n"
+                    "• <code>/resume</code> - Resume playback\n"
+                    "• <code>/skip</code> - Skip current track\n"
+                    "• <code>/stop</code> - Stop playback & leave VC\n"
+                    "• <code>/seek 10s</code> / <code>/seek 1m</code> - Seek stream forward\n"
+                    "• <code>/reset</code> - Perform full system reset\n"
+                    "• <code>/reload</code> - Reload bot process"
+                ),
+                "auth": (
+                    "👥 <b>APPROVED CONTROLS:</b>\n\n"
+                    "• <code>/approvecontrol</code> - Grant control permission to reply user\n"
+                    "• <code>/unapprovecontrol</code> - Revoke control permission\n"
+                    "• <code>/approvedusers</code> - View all approved users in group"
+                ),
+                "blacklist": (
+                    "🛡 <b>BOT SETTINGS:</b>\n\n"
+                    "• <code>/welcome on</code> - Enable group welcome card\n"
+                    "• <code>/welcome off</code> - Disable group welcome card\n"
+                    "• <code>/start on</code> - Enable start intro card\n"
+                    "• <code>/start off</code> - Disable start intro card"
+                ),
+                "language": (
+                    "⚙️ <b>STREAM QUALITY & FPS PREFERENCES:</b>\n\n"
+                    "• <code>/quality 1080p</code> - Set 1080p video quality\n"
+                    "• <code>/quality 720p</code> - Set 720p video quality\n"
+                    "• <code>/fps 60</code> - Set 60 FPS framerate\n"
+                    "• <code>/fps 30</code> - Set 30 FPS framerate"
+                ),
+                "ping": (
+                    "⚡ <b>SYSTEM & PING:</b>\n\n"
+                    "• <code>/ping</code> - Check bot response speed\n"
+                    "• <code>/sysstats</code> - View VPS CPU, RAM & Uptime stats"
+                ),
+                "play": (
+                    "🎬 <b>PLAYBACK COMMANDS:</b>\n\n"
+                    "• <code>/vd</code> <i>[song/link]</i> - Stream Video (720p 60fps)\n"
+                    "• <code>/ad</code> <i>[song/link]</i> - Stream HQ Studio Audio\n"
+                    "• <code>/list</code> <i>[playlist link]</i> - Play Video Playlist\n"
+                    "• <code>/la</code> <i>[playlist link]</i> - Play Audio Playlist\n"
+                    "• <code>/plresume</code> - Resume saved playlist from last song"
+                ),
+                "queue": (
+                    "🔀 <b>QUEUE & AUTOPLAY:</b>\n\n"
+                    "• <code>/queue</code> - View upcoming queued tracks\n"
+                    "• <code>/shuffle</code> - Shuffle upcoming queued tracks\n"
+                    "• <code>/autoplays</code> - Toggle Smart Auto-Play mode (ON/OFF)\n"
+                    "• <code>/automode</code> - Toggle Auto-Play mode"
+                ),
+                "stats": (
+                    "📊 <b>GROUP STATS & HISTORY:</b>\n\n"
+                    "• <code>/stats</code> - View bot global stats\n"
+                    "• <code>/myplaylists</code> - View saved playlists history in group"
+                ),
+                "sudoers": (
+                    "👑 <b>SUDO & OWNER COMMANDS:</b>\n\n"
+                    "• <code>/addsudo</code> - Add a new sudo user\n"
+                    "• <code>/delsudo</code> - Remove a sudo user\n"
+                    "• <code>/sudolist</code> - View all sudo users\n"
+                    "• <code>/broadcast</code> - Broadcast message to all groups"
+                )
+            }
+            cat_text = cat_map.get(cat, "<b>Help Category</b>")
+            markup = InlineKeyboardMarkup([[
+                InlineKeyboardButton("Back", callback_data="welcome_help", style="primary")
+            ]])
+            await edit_styled(chat_id, cat_text, markup, message_id=message_id, is_video=is_video)
+            await query.answer()
+
         elif data == "welcome_about":
             about_text = (
-                f"👑 <b>ɢᴀᴍᴇᴏᴠᴇʀ ʏᴛ sᴛʀᴇᴀᴍᴇʀ</b> 👑\n\n"
-                f"I AM A PREMIUM HIGH-PERFORMANCE YOUTUBE BOT DESIGNED TO STREAM BOTH VIDEO AND AUDIO LIVE IN TELEGRAM GROUP VOICE CHATS.\n\n"
-                f"Designed and maintained by the 👑 <b>GameOver Team</b>."
+                f"Hey <b>{user_name}</b>,\n\n"
+                f"This is <b>GameOver YT Streamer</b> !\n\n"
+                f"A premium high-performance YouTube video & audio streaming bot.\n\n"
+                f"Developed and maintained by 👑 <b>GameOver Team</b>."
             )
-            markup = InlineKeyboardMarkup([[
-                InlineKeyboardButton("🔙 BACK", callback_data="welcome_back", style="primary")
-            ]])
+            markup = InlineKeyboardMarkup([
+                [InlineKeyboardButton("Owner 👑", url=Config.get_owner_url(), style="primary")],
+                [InlineKeyboardButton("Back", callback_data="welcome_back", style="primary")]
+            ])
             await edit_styled(chat_id, about_text, markup, message_id=message_id, is_video=is_video)
             await query.answer()
             
         elif data == "welcome_back":
             welcome_text = (
-                f"👑 <b>ɢᴀᴍᴇᴏᴠᴇʀ ʏᴛ sᴛʀᴇᴀᴍᴇʀ</b> 👑\n\n"
-                f"🔥 <b>WELCOME, {user_name.upper()}!</b> 🔥\n\n"
-                f"I AM 🎬 <b>GameOver YT Streamer</b>, A PREMIUM HIGH-PERFORMANCE YOUTUBE VIDEO AND AUDIO STREAMING BOT.\n\n"
-                f"⚡ <b>SUPPORTED SOURCES:</b>\n"
-                f"• <b>YOUTUBE</b> (LOCKED 720P 60 FPS)\n\n"
-                f"CLICK THE BUTTONS BELOW TO EXPLORE COMMANDS!"
+                f"Hey <b>{user_name}</b>,\n"
+                f"This is <b>GameOver YT Streamer</b> !\n\n"
+                f"A music player bot with some awesome and useful features.\n\n"
+                f"<i>Click on the buttons below to get information about my commands.</i>"
             )
             buttons = InlineKeyboardMarkup([
                 [
-                    InlineKeyboardButton("➕ ADD ME TO YOUR GROUP", url=f"https://t.me/{bot_username}?startgroup=true", style="success")
+                    InlineKeyboardButton("Add me to your group", url=f"https://t.me/{bot_username}?startgroup=true", style="success")
                 ],
                 [
-                    InlineKeyboardButton("📚 HELP MENU", callback_data="welcome_help", style="primary"),
-                    InlineKeyboardButton("ℹ️ ABOUT BOT", callback_data="welcome_about", style="primary")
+                    InlineKeyboardButton("Help", callback_data="welcome_help", style="primary")
+                ],
+                [
+                    InlineKeyboardButton("Owner 👑", url=Config.get_owner_url(), style="primary")
+                ],
+                [
+                    InlineKeyboardButton("About", callback_data="welcome_about", style="danger")
                 ]
             ])
             await edit_styled(chat_id, welcome_text, buttons, message_id=message_id, is_video=is_video)

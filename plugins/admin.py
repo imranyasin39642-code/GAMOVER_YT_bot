@@ -815,7 +815,7 @@ def register(app: Client):
                 uid = u["user_id"]
                 uname = u["user_name"] or f"User {uid}"
                 by_id = u.get("approved_by", 0)
-                t_str = datetime.datetime.fromtimestamp(u.get("added_at", time.time())).strftime("%d %b %Y, %I:%M %p")
+                t_str = datetime.fromtimestamp(u.get("added_at", time.time())).strftime("%d %b %Y, %I:%M %p")
                 lines.append(
                     f"<b>{i}.</b> <a href=\"tg://user?id={uid}\">{uname}</a> [<code>{uid}</code>] (Group: <code>{gid}</code>)\n"
                     f"   📅 <i>Approved On: {t_str}</i>\n"
@@ -861,37 +861,11 @@ def register(app: Client):
             except Exception:
                 pass
             import sys
-            import os
             print("[System] Admin initiated process reload...")
             os._exit(0)
 
         elif data == "admin_cookies_delete":
-            path = Config.COOKIES_FILE
-            if os.path.exists(path):
-                try:
-                    os.remove(path)
-                    await query.answer("🗑 Cookies deleted from VPS successfully!", show_alert=True)
-                except Exception as e:
-                    await query.answer(f"❌ Error deleting file: {e}", show_alert=True)
-            else:
-                await query.answer("⚠️ No cookies.txt found on disk!", show_alert=True)
-                
-            status_text = get_cookies_status()
-            markup = get_cookies_manager_markup()
-            from bot import send_styled
-            await send_styled(
-                chat_id=chat_id,
-                text=(
-                    f"{ROYAL_HEADER}"
-                    f"🍪 <b>YouTube Cookies Manager</b>\n\n"
-                    f"{status_text}\n\n"
-                    f"💡 <b>How to update/upload cookies:</b>\n"
-                    f"Simply send or forward a Netscape-format <code>.txt</code> file containing the word 'cookies' (e.g. <code>cookies.txt</code>) to this chat.\n\n"
-                    f"The bot will automatically validate, delete old cookies, and replace them instantly."
-                ),
-                markup=markup,
-                message_id=query.message.id
-            )
+            await query.answer("🟢 100% Zero-Cookie Architecture Active! No cookies needed on VPS.", show_alert=True)
 
         elif data == "admin_network":
             await query.answer("Loading Network Manager...")

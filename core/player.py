@@ -316,6 +316,21 @@ class PlayerManager:
         self.is_changing_effect: set[int] = set()      # chat_id -> currently applying audio effect filter
         self.effect_ignore_until: dict[int, float] = {} # chat_id -> timestamp until which stream_end is ignored
 
+        # Auto-Play & Shuffle state
+        self.autoplay_chats: set[int] = set()          # chat_id -> set of chats with Auto-Play enabled
+        self.last_played_title: dict[int, str] = {}    # chat_id -> last played track title
+        self.last_played_videoid: dict[int, str] = {}  # chat_id -> last played video ID
+        self.last_played_mode: dict[int, str] = {}     # chat_id -> last played mode (video/audio)
+        self.listener_monitors: dict[int, asyncio.Task] = {} # chat_id -> 0-listener background monitor task
+
+    def shuffle_queue(self, chat_id: int) -> bool:
+        """Shuffles upcoming songs in queue randomly."""
+        import random
+        if chat_id in self.queues and len(self.queues[chat_id]) > 1:
+            random.shuffle(self.queues[chat_id])
+            return True
+        return False
+
     # ── Progress bar helpers ─────────────────────────────────────────────────
 
     @staticmethod
@@ -444,8 +459,8 @@ class PlayerManager:
         self._cancel_idle_timer(chat_id)
         
         async def idle_timer():
-            await asyncio.sleep(300) # 5 minutes
-            print(f"[Player] Idle timeout triggered in chat {chat_id}")
+            await asyncio.sleep(600) # 10 minutes idle
+            print(f"[Player] 10-minute idle timeout triggered in chat {chat_id}")
             try:
                 from bot import send_styled
                 await send_styled(chat_id, "<b>No one listening, I leave voice chat. Bye.</b>")
@@ -454,13 +469,91 @@ class PlayerManager:
             await self.stop(chat_id)
             
         self.idle_tasks[chat_id] = asyncio.create_task(idle_timer())
-        print(f"[Player] Started 5-minute idle timer in chat {chat_id}")
+        print(f"[Player] Started 10-minute idle timer in chat {chat_id}")
 
     def _cancel_idle_timer(self, chat_id: int):
         task = self.idle_tasks.pop(chat_id, None)
         if task:
             task.cancel()
             print(f"[Player] Cancelled idle timer in chat {chat_id}")
+
+    def _start_listener_monitor(self, chat_id: int):
+        self._cancel_listener_monitor(chat_id)
+        
+        async def monitor():
+            zero_count_ticks = 0
+            while chat_id in self.active_calls:
+                await asyncio.sleep(60)
+                if chat_id not in self.active_calls:
+                    break
+                try:
+                    cnt = await self._get_listener_count(chat_id)
+                    if cnt == 0:
+                        zero_count_ticks += 1
+                        print(f"[Player/ListenerMonitor] Chat {chat_id}: 0 human listeners ({zero_count_ticks}/10 mins)")
+                        if zero_count_ticks >= 10:
+                            print(f"[Player/ListenerMonitor] 10 minutes 0-listener timeout triggered in chat {chat_id}")
+                            try:
+                                from bot import send_styled
+                                await send_styled(chat_id, "<b>No one listening, I leave voice chat. Bye.</b>")
+                            except Exception:
+                                pass
+                            await self.stop(chat_id)
+                            break
+                    else:
+                        zero_count_ticks = 0
+                except asyncio.CancelledError:
+                    return
+                except Exception as e:
+                    print(f"[Player/ListenerMonitor] Check note in {chat_id}: {e}")
+
+        self.listener_monitors[chat_id] = asyncio.create_task(monitor())
+
+    def _cancel_listener_monitor(self, chat_id: int):
+        task = self.listener_monitors.pop(chat_id, None)
+        if task:
+            task.cancel()
+
+    async def _get_listener_count(self, chat_id: int) -> int:
+        """Helper to fetch count of non-bot human listeners in Telegram voice chat."""
+        try:
+            from pyrogram.raw.functions.phone import GetGroupCallParticipants
+            from pyrogram.raw.functions.channels import GetFullChannel
+            from pyrogram.raw.functions.messages import GetFullChat
+            from pyrogram.raw.types import InputGroupCall, InputPeerChannel, InputPeerChat
+
+            peer = await self._assistant.resolve_peer(chat_id)
+            call = None
+            if isinstance(peer, InputPeerChannel):
+                full = await self._assistant.invoke(GetFullChannel(channel=peer))
+                call = full.full_chat.call
+            elif isinstance(peer, InputPeerChat):
+                full = await self._assistant.invoke(GetFullChat(chat_id=chat_id))
+                call = full.full_chat.call
+                
+            if not call:
+                return 0
+
+            input_call = InputGroupCall(id=call.id, access_hash=call.access_hash)
+            participants = await self._assistant.invoke(GetGroupCallParticipants(
+                call=input_call,
+                ids=[],
+                sources=[],
+                offset="",
+                limit=100
+            ))
+            
+            as_me = await self._assistant.get_me()
+            bot_me = await self.app.get_me()
+            
+            count = 0
+            for p in participants.participants:
+                if p.user_id not in (as_me.id, bot_me.id) and not getattr(p, "is_left", False):
+                    count += 1
+            return count
+        except Exception as e:
+            print(f"[Player/ListenerCount] Note in {chat_id}: {e}")
+            return 1
 
     async def _send_tg_logger_event(
         self,
@@ -602,7 +695,31 @@ class PlayerManager:
 
                 asyncio.create_task(_safe_play_next(next_song))
             else:
-                # Queue empty — start 5-min idle timer
+                # Queue empty — check if Auto-Play is enabled for this chat
+                if chat_id in self.autoplay_chats:
+                    last_t = self.last_played_title.get(chat_id, "")
+                    last_v = self.last_played_videoid.get(chat_id, "")
+                    mode = self.last_played_mode.get(chat_id, "video")
+                    
+                    try:
+                        from bot import send_styled
+                        await send_styled(chat_id, f"🔀 <b>Smart Auto-Play:</b> Finding related YouTube recommendations...")
+                    except Exception:
+                        pass
+                        
+                    from core.scrapers import get_youtube_recommendations
+                    rec = await get_youtube_recommendations(last_t, last_v)
+                    if rec and rec.get("url"):
+                        print(f"[Player/AutoPlay] Auto-playing recommendation: {rec.get('title')}")
+                        asyncio.create_task(self.play(
+                            chat_id=chat_id,
+                            youtube_url=rec["url"],
+                            mode=mode,
+                            requested_by="Smart AutoPlay 🤖"
+                        ))
+                        return
+                
+                # Otherwise, notify and start 5-min idle timer
                 try:
                     from bot import send_styled
                     await send_styled(chat_id, "<b>Playback ended. Queue is empty.</b>")
@@ -782,13 +899,24 @@ class PlayerManager:
         # ── Auto-search if user gave a text query instead of a URL ──────────
         if not is_youtube_url(youtube_url):
             query = youtube_url.strip()
-            if status_msg:
-                await status_msg.edit_text(f"{ROYAL_HEADER}🔍 <b>Searching YouTube for:</b> <code>{query}</code>...")
+            if status_msg and hasattr(status_msg, "edit_text"):
+                try:
+                    await status_msg.edit_text(
+                        f"👑 <b>ɢᴀᴍᴇᴏᴠᴇʀ ʏᴛ sᴛʀᴇᴀᴍᴇʀ</b> 👑\n\n"
+                        f"🔍 <b>S E A R C H I N G   Y O U T U B E...</b>\n"
+                        f"📌 <b>Track:</b> <code>{query}</code>\n\n"
+                    )
+                except Exception:
+                    pass
             result = await search_youtube(query)
             if not result:
                 if status_msg:
+                    try:
+                        await status_msg.delete()
+                    except Exception:
+                        pass
                     from bot import make_card
-                    await status_msg.edit_text(make_card("❌ <b>No YouTube results found!</b>\nPlease try searching with a different track name."))
+                    await self.app.send_message(chat_id, make_card("❌ <b>No YouTube results found!</b>\nPlease try searching with a different track name."))
                 return False
             youtube_url = result["url"]
             print(f"[Player] Search resolved to: {youtube_url}")
@@ -1211,6 +1339,10 @@ class PlayerManager:
             self.active_requester_id[chat_id] = requested_by_id
             self.stream_start_time[chat_id] = time.time()
             self.stream_title[chat_id] = title
+            self.last_played_title[chat_id] = title
+            self.last_played_videoid[chat_id] = video_id
+            self.last_played_mode[chat_id] = mode
+            self._start_listener_monitor(chat_id)
 
             # Ensure total stream duration is resolved for live progress bar timer
             if not self.stream_duration.get(chat_id, 0):
@@ -1557,6 +1689,7 @@ class PlayerManager:
         """Leaves the call and clears memory queues for chat_id. Keeps saved playlist state in DB for /plresume."""
         self._cancel_progress_task(chat_id)
         self._cancel_idle_timer(chat_id)
+        self._cancel_listener_monitor(chat_id)
         self.in_effects_menu.discard(chat_id)
 
         try:
@@ -1564,16 +1697,25 @@ class PlayerManager:
         except Exception as e:
             print(f"[Player] pytg.leave_call note in {chat_id}: {e}")
 
-        # Raw Pyrogram call disconnect to ensure assistant leaves Telegram UI voice chat
+        # Raw Pyrogram call disconnect to ensure assistant leaves Telegram UI voice chat 100%
         try:
+            from pyrogram.raw.functions.channels import GetFullChannel
+            from pyrogram.raw.functions.messages import GetFullChat
             from pyrogram.raw.functions.phone import LeaveGroupCall
-            from pyrogram.raw.types import InputGroupCall
-            chat = await self.app.get_chat(chat_id)
-            if hasattr(chat, "call") and chat.call:
-                await self._assistant.invoke(
-                    LeaveGroupCall(call=InputGroupCall(id=chat.call.id, access_hash=chat.call.access_hash), source=0)
-                )
-                print(f"[Player] Raw LeaveGroupCall invoked for chat {chat_id}")
+            from pyrogram.raw.types import InputPeerChannel, InputPeerChat
+
+            peer = await self._assistant.resolve_peer(chat_id)
+            call_info = None
+            if isinstance(peer, InputPeerChannel):
+                full_chat = await self._assistant.invoke(GetFullChannel(channel=peer))
+                call_info = getattr(full_chat.full_chat, "call", None)
+            elif isinstance(peer, InputPeerChat):
+                full_chat = await self._assistant.invoke(GetFullChat(chat_id=peer.chat_id))
+                call_info = getattr(full_chat.full_chat, "call", None)
+
+            if call_info:
+                await self._assistant.invoke(LeaveGroupCall(call=call_info, source=0))
+                print(f"[Player] Raw LeaveGroupCall executed successfully for chat {chat_id}")
         except Exception as raw_leave_err:
             print(f"[Player] Raw LeaveGroupCall note: {raw_leave_err}")
 
