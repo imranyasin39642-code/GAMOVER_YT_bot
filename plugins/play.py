@@ -45,7 +45,17 @@ def cmd(cmds):
     if isinstance(cmds, str):
         cmds = [cmds]
     clean_cmds = [c.lstrip("/").lower() for c in cmds]
-    return filters.command(clean_cmds, prefixes=["/", "!", "."])
+
+    async def func(flt, client, message: Message):
+        text = (message.text or message.caption or "").strip()
+        if not text.startswith(("/", "!", ".")):
+            return False
+        first_word = text.split()[0][1:].lower()
+        if "@" in first_word:
+            first_word = first_word.split("@")[0]
+        return first_word in flt.clean_cmds
+
+    return filters.create(func, clean_cmds=clean_cmds)
 
 def register(app: Client):
 
@@ -54,6 +64,7 @@ def register(app: Client):
         if message.chat and message.chat.id:
             title = message.chat.title or "Group Chat"
             update_group_info(message.chat.id, title)
+            print(f"[GroupMsg] Received in group {message.chat.id}: '{message.text or message.caption}'")
         message.continue_propagation()
 
     @app.on_message(cmd(["start"]))
