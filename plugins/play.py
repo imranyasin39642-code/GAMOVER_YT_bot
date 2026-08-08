@@ -207,60 +207,108 @@ async def send_search_status(client: Client, chat_id: int, query: str) -> Messag
         chat_id = message.chat.id
         if not is_group_bot_active(chat_id):
             return
-        if len(message.command) < 2:
-            await message.reply_text(
-                make_card(
-                    f"{ROYAL_HEADER}❌ <b>YouTube playlist link dein!</b>\n\n"
-                    f"👉 <b>Click to Copy Example:</b>\n"
-                    f"• <code>/list https://www.youtube.com/playlist?list=RDMM</code>"
-                )
-            )
+
+        if len(message.command) >= 2:
+            query = message.command[1].strip()
+            status_msg = await message.reply_text(make_card(f"{ROYAL_HEADER}⏳ <b>Processing Playlist... Please wait!</b>"))
+            
+            req_name = message.from_user.first_name if message.from_user else "User"
+            req_id = message.from_user.id if message.from_user else 0
+            
+            asyncio.create_task(player_manager.play(
+                chat_id=chat_id,
+                youtube_url=query,
+                mode="video",
+                status_msg=status_msg,
+                requested_by=req_name,
+                requested_by_id=req_id
+            ))
             return
 
-        query = message.command[1].strip()
-        status_msg = await message.reply_text(make_card(f"{ROYAL_HEADER}⏳ <b>Processing Playlist... Please wait!</b>"))
-        
-        req_name = message.from_user.first_name if message.from_user else "User"
-        req_id = message.from_user.id if message.from_user else 0
-        
-        asyncio.create_task(player_manager.play(
-            chat_id=chat_id,
-            youtube_url=query,
-            mode="video",
-            status_msg=status_msg,
-            requested_by=req_name,
-            requested_by_id=req_id
-        ))
+        # Empty command handling: check for saved playlist resume
+        from core.db import get_playlist_state
+        state = get_playlist_state(chat_id, "video") or get_playlist_state(chat_id, "audio")
+        if state and state.get("playlist_id"):
+            last_idx = state.get("last_index", 0)
+            mode = state.get("mode", "video")
+            
+            card_text = (
+                f"{ROYAL_HEADER}📜 <b>SAVED PLAYLIST FOUND!</b>\n\n"
+                f"📌 <b>Last Played:</b> <code>Song #{last_idx + 1}</code>\n"
+                f"🎧 <b>Mode:</b> <code>{mode.title()}</code>\n\n"
+                f"<i>Resume saved playlist or start over from Song #1:</i>"
+            )
+            buttons = InlineKeyboardMarkup([
+                [
+                    InlineKeyboardButton(f"▶️ RESUME (Song #{last_idx + 1})", callback_data=f"pl_resume|{chat_id}|{mode}"),
+                    InlineKeyboardButton("🔄 RESTART (#1)", callback_data=f"pl_restart|{chat_id}|{mode}")
+                ],
+                [InlineKeyboardButton("🗑 CLOSE", callback_data="play_close", style="danger")]
+            ])
+            await message.reply_text(make_card(card_text), reply_markup=buttons)
+            return
+
+        await message.reply_text(
+            make_card(
+                f"{ROYAL_HEADER}❌ <b>YouTube playlist link dein!</b>\n\n"
+                f"👉 <b>Click to Copy Example:</b>\n"
+                f"• <code>/list https://www.youtube.com/playlist?list=RDMM</code>"
+            )
+        )
 
     @app.on_message(filters.command(["playlistaudio", "listaudio", "la"]) & filters.group)
     async def playlist_audio_command(client: Client, message: Message):
         chat_id = message.chat.id
         if not is_group_bot_active(chat_id):
             return
-        if len(message.command) < 2:
-            await message.reply_text(
-                make_card(
-                    f"{ROYAL_HEADER}❌ <b>YouTube playlist link dein!</b>\n\n"
-                    f"👉 <b>Click to Copy Example:</b>\n"
-                    f"• <code>/la https://www.youtube.com/playlist?list=RDMM</code>"
-                )
-            )
+
+        if len(message.command) >= 2:
+            query = message.command[1].strip()
+            status_msg = await message.reply_text(make_card(f"{ROYAL_HEADER}⏳ <b>Processing Audio Playlist... Please wait!</b>"))
+            
+            req_name = message.from_user.first_name if message.from_user else "User"
+            req_id = message.from_user.id if message.from_user else 0
+            
+            asyncio.create_task(player_manager.play(
+                chat_id=chat_id,
+                youtube_url=query,
+                mode="audio",
+                status_msg=status_msg,
+                requested_by=req_name,
+                requested_by_id=req_id
+            ))
             return
 
-        query = message.command[1].strip()
-        status_msg = await message.reply_text(make_card(f"{ROYAL_HEADER}⏳ <b>Processing Audio Playlist... Please wait!</b>"))
-        
-        req_name = message.from_user.first_name if message.from_user else "User"
-        req_id = message.from_user.id if message.from_user else 0
-        
-        asyncio.create_task(player_manager.play(
-            chat_id=chat_id,
-            youtube_url=query,
-            mode="audio",
-            status_msg=status_msg,
-            requested_by=req_name,
-            requested_by_id=req_id
-        ))
+        # Empty command handling: check for saved playlist resume
+        from core.db import get_playlist_state
+        state = get_playlist_state(chat_id, "audio") or get_playlist_state(chat_id, "video")
+        if state and state.get("playlist_id"):
+            last_idx = state.get("last_index", 0)
+            mode = state.get("mode", "audio")
+            
+            card_text = (
+                f"{ROYAL_HEADER}📜 <b>SAVED AUDIO PLAYLIST FOUND!</b>\n\n"
+                f"📌 <b>Last Played:</b> <code>Song #{last_idx + 1}</code>\n"
+                f"🎧 <b>Mode:</b> <code>{mode.title()}</code>\n\n"
+                f"<i>Resume saved audio playlist or start over:</i>"
+            )
+            buttons = InlineKeyboardMarkup([
+                [
+                    InlineKeyboardButton(f"▶️ RESUME (Song #{last_idx + 1})", callback_data=f"pl_resume|{chat_id}|{mode}"),
+                    InlineKeyboardButton("🔄 RESTART (#1)", callback_data=f"pl_restart|{chat_id}|{mode}")
+                ],
+                [InlineKeyboardButton("🗑 CLOSE", callback_data="play_close", style="danger")]
+            ])
+            await message.reply_text(make_card(card_text), reply_markup=buttons)
+            return
+
+        await message.reply_text(
+            make_card(
+                f"{ROYAL_HEADER}❌ <b>YouTube playlist link dein!</b>\n\n"
+                f"👉 <b>Click to Copy Example:</b>\n"
+                f"• <code>/la https://www.youtube.com/playlist?list=RDMM</code>"
+            )
+        )
 
     @app.on_message(filters.command(["plresume", "playlistresume", "resumeplaylist"]) & filters.group)
     async def pl_resume_command(client: Client, message: Message):
