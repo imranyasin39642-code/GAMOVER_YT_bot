@@ -41,6 +41,22 @@ def build_effects_markup(selected_effect: str, chat_id: int, requested_by_id: in
     buttons.append([InlineKeyboardButton("BACK", callback_data=f"fx_back|{chat_id}|{requested_by_id}", style="primary")])
     return InlineKeyboardMarkup(buttons)
 
+def cmd_filter(cmds):
+    """Custom command filter matching /cmd, /cmd@botname, case-insensitively across groups and PMs."""
+    async def func(flt, client, message: Message):
+        text = (message.text or message.caption or "").strip()
+        if not text.startswith("/"):
+            return False
+        first_word = text.split()[0][1:]
+        if "@" in first_word:
+            cmd, bot_tag = first_word.split("@", 1)
+            bot_username = Config.BOT_USERNAME or (getattr(client, "me", None) and getattr(client.me, "username", "")) or ""
+            if bot_username and bot_tag.lower() != bot_username.lower():
+                return False
+            first_word = cmd
+        return first_word.lower() in [c.lower() for c in flt.cmds]
+    return filters.create(func, cmds=cmds)
+
 def register(app: Client):
 
     @app.on_message(filters.group, group=-1)
@@ -49,7 +65,7 @@ def register(app: Client):
             title = message.chat.title or "Group Chat"
             update_group_info(message.chat.id, title)
 
-    @app.on_message(filters.command("start"))
+    @app.on_message(cmd_filter(["start"]))
     async def start_command(client: Client, message: Message):
         bot_username = Config.BOT_USERNAME or (await client.get_me()).username
         user_name = message.from_user.first_name if message.from_user else "User"
@@ -152,12 +168,13 @@ async def send_search_status(client: Client, chat_id: int, query: str) -> Messag
         )
     )
 
-    @app.on_message(filters.command(["vd", "video"]) & filters.group)
+    @app.on_message(cmd_filter(["vd", "video"]))
     async def play_command(client: Client, message: Message):
         chat_id = message.chat.id
-        if not is_group_bot_active(chat_id):
-            return
-        if len(message.command) < 2:
+        parts = (message.text or message.caption or "").split(maxsplit=1)
+        query = parts[1].strip() if len(parts) > 1 else ""
+
+        if not query:
             await message.reply_text(
                 make_card(
                     f"{ROYAL_HEADER}❌ <b>Please specify a track name or YouTube URL!</b>\n\n"
@@ -168,20 +185,18 @@ async def send_search_status(client: Client, chat_id: int, query: str) -> Messag
             )
             return
 
-        query = " ".join(message.command[1:]).strip()
         status_msg = await send_search_status(client, chat_id, query)
-        
         req_name = message.from_user.first_name if message.from_user else "User"
         req_id = message.from_user.id if message.from_user else 0
-        
         asyncio.create_task(player_manager.play(chat_id, query, mode="video", status_msg=status_msg, requested_by=req_name, requested_by_id=req_id))
 
-    @app.on_message(filters.command(["audio", "ad"]) & filters.group)
+    @app.on_message(cmd_filter(["audio", "ad"]))
     async def audio_command(client: Client, message: Message):
         chat_id = message.chat.id
-        if not is_group_bot_active(chat_id):
-            return
-        if len(message.command) < 2:
+        parts = (message.text or message.caption or "").split(maxsplit=1)
+        query = parts[1].strip() if len(parts) > 1 else ""
+
+        if not query:
             await message.reply_text(
                 make_card(
                     f"{ROYAL_HEADER}❌ <b>Please specify a track name or YouTube URL!</b>\n\n"
@@ -192,27 +207,21 @@ async def send_search_status(client: Client, chat_id: int, query: str) -> Messag
             )
             return
 
-        query = " ".join(message.command[1:]).strip()
         status_msg = await send_search_status(client, chat_id, query)
-        
         req_name = message.from_user.first_name if message.from_user else "User"
         req_id = message.from_user.id if message.from_user else 0
-        
         asyncio.create_task(player_manager.play(chat_id, query, mode="audio", status_msg=status_msg, requested_by=req_name, requested_by_id=req_id))
 
-    @app.on_message(filters.command(["playlist", "list"]) & filters.group)
+    @app.on_message(cmd_filter(["playlist", "list"]))
     async def playlist_command(client: Client, message: Message):
         chat_id = message.chat.id
-        if not is_group_bot_active(chat_id):
-            return
+        parts = (message.text or message.caption or "").split(maxsplit=1)
+        query = parts[1].strip() if len(parts) > 1 else ""
 
-        if len(message.command) >= 2:
-            query = message.command[1].strip()
+        if query:
             status_msg = await message.reply_text(make_card(f"{ROYAL_HEADER}⏳ <b>Processing Playlist... Please wait!</b>"))
-            
             req_name = message.from_user.first_name if message.from_user else "User"
             req_id = message.from_user.id if message.from_user else 0
-            
             asyncio.create_task(player_manager.play(
                 chat_id=chat_id,
                 youtube_url=query,
@@ -229,7 +238,6 @@ async def send_search_status(client: Client, chat_id: int, query: str) -> Messag
         if state and state.get("playlist_id"):
             last_idx = state.get("last_index", 0)
             mode = state.get("mode", "video")
-            
             card_text = (
                 f"{ROYAL_HEADER}📜 <b>SAVED PLAYLIST FOUND!</b>\n\n"
                 f"📌 <b>Last Played:</b> <code>Song #{last_idx + 1}</code>\n"
@@ -254,19 +262,16 @@ async def send_search_status(client: Client, chat_id: int, query: str) -> Messag
             )
         )
 
-    @app.on_message(filters.command(["playlistaudio", "listaudio", "la"]) & filters.group)
+    @app.on_message(cmd_filter(["playlistaudio", "listaudio", "la"]))
     async def playlist_audio_command(client: Client, message: Message):
         chat_id = message.chat.id
-        if not is_group_bot_active(chat_id):
-            return
+        parts = (message.text or message.caption or "").split(maxsplit=1)
+        query = parts[1].strip() if len(parts) > 1 else ""
 
-        if len(message.command) >= 2:
-            query = message.command[1].strip()
+        if query:
             status_msg = await message.reply_text(make_card(f"{ROYAL_HEADER}⏳ <b>Processing Audio Playlist... Please wait!</b>"))
-            
             req_name = message.from_user.first_name if message.from_user else "User"
             req_id = message.from_user.id if message.from_user else 0
-            
             asyncio.create_task(player_manager.play(
                 chat_id=chat_id,
                 youtube_url=query,
@@ -277,13 +282,11 @@ async def send_search_status(client: Client, chat_id: int, query: str) -> Messag
             ))
             return
 
-        # Empty command handling: check for saved playlist resume
         from core.db import get_playlist_state
         state = get_playlist_state(chat_id, "audio") or get_playlist_state(chat_id, "video")
         if state and state.get("playlist_id"):
             last_idx = state.get("last_index", 0)
             mode = state.get("mode", "audio")
-            
             card_text = (
                 f"{ROYAL_HEADER}📜 <b>SAVED AUDIO PLAYLIST FOUND!</b>\n\n"
                 f"📌 <b>Last Played:</b> <code>Song #{last_idx + 1}</code>\n"
@@ -466,11 +469,9 @@ async def send_search_status(client: Client, chat_id: int, query: str) -> Messag
             status_msg=query.message
         ))
 
-    @app.on_message(filters.command("pause") & filters.group)
+    @app.on_message(cmd_filter(["pause", "cpause"]))
     async def pause_command(client: Client, message: Message):
         chat_id = message.chat.id
-        if not is_group_bot_active(chat_id):
-            return
         user_id = message.from_user.id if message.from_user else 0
         active_req_id = player_manager.active_requester_id.get(chat_id, 0)
         from core.db import is_user_approved
@@ -496,11 +497,9 @@ async def send_search_status(client: Client, chat_id: int, query: str) -> Messag
         else:
             await message.reply_text(make_card(f"{ROYAL_HEADER}⚠️ <b>Abhi kuch bhi play nahi ho raha!</b>"))
 
-    @app.on_message(filters.command("resume") & filters.group)
+    @app.on_message(cmd_filter(["resume", "cresume"]))
     async def resume_command(client: Client, message: Message):
         chat_id = message.chat.id
-        if not is_group_bot_active(chat_id):
-            return
         user_id = message.from_user.id if message.from_user else 0
         active_req_id = player_manager.active_requester_id.get(chat_id, 0)
         from core.db import is_user_approved
@@ -526,11 +525,9 @@ async def send_search_status(client: Client, chat_id: int, query: str) -> Messag
         else:
             await message.reply_text(make_card(f"{ROYAL_HEADER}⚠️ <b>Kuch bhi paused nahi hai!</b>"))
 
-    @app.on_message(filters.command(["skip", "next", "seek"]) & filters.group)
+    @app.on_message(cmd_filter(["skip", "cskip", "next", "cnext", "seek", "cseek"]))
     async def skip_command(client: Client, message: Message):
         chat_id = message.chat.id
-        if not is_group_bot_active(chat_id):
-            return
         user_id = message.from_user.id if message.from_user else 0
         active_req_id = player_manager.active_requester_id.get(chat_id, 0)
         from core.db import is_user_approved
@@ -554,10 +551,11 @@ async def send_search_status(client: Client, chat_id: int, query: str) -> Messag
             await message.reply_text(make_card("⚠️ Only the requester, an Admin, or an Approved User can skip/seek!"))
             return
 
-        args = message.command[1:] if len(message.command) > 1 else []
-        cmd_name = message.command[0].lower()
+        parts = (message.text or message.caption or "").split()
+        args = parts[1:] if len(parts) > 1 else []
+        cmd_name = parts[0][1:].lower() if parts else ""
 
-        if args or cmd_name == "seek":
+        if args or cmd_name in ("seek", "cseek"):
             if not args:
                 await message.reply_text(
                     make_card(
@@ -610,11 +608,9 @@ async def send_search_status(client: Client, chat_id: int, query: str) -> Messag
         if not skipped:
             await message.reply_text(make_card(f"{ROYAL_HEADER}⏹ <b>Queue empty! Playback stopped.</b>"))
 
-    @app.on_message(filters.command("stop") & filters.group)
+    @app.on_message(cmd_filter(["stop", "cstop", "end", "cend"]))
     async def stop_command(client: Client, message: Message):
         chat_id = message.chat.id
-        if not is_group_bot_active(chat_id):
-            return
         user_id = message.from_user.id if message.from_user else 0
         active_req_id = player_manager.active_requester_id.get(chat_id, 0)
         from core.db import is_user_approved
@@ -804,12 +800,9 @@ async def send_search_status(client: Client, chat_id: int, query: str) -> Messag
         print("[System] Owner initiated process reload...")
         os._exit(0)
 
-    @app.on_message(filters.command(["shuffle", "cshuffle"]) & filters.group)
+    @app.on_message(cmd_filter(["shuffle", "cshuffle"]))
     async def shuffle_command(client: Client, message: Message):
         chat_id = message.chat.id
-        if not is_group_bot_active(chat_id):
-            return
-        
         ok = player_manager.shuffle_queue(chat_id)
         if ok:
             next_t = player_manager.queues[chat_id][0]['title']
@@ -827,12 +820,9 @@ async def send_search_status(client: Client, chat_id: int, query: str) -> Messag
                 )
             )
 
-    @app.on_message(filters.command(["autoplays", "automode", "ap", "autoplay"]) & filters.group)
+    @app.on_message(cmd_filter(["autoplays", "automode", "ap", "autoplay"]))
     async def autoplay_command(client: Client, message: Message):
         chat_id = message.chat.id
-        if not is_group_bot_active(chat_id):
-            return
-        
         user_name = message.from_user.first_name if message.from_user else "User"
         user_id = message.from_user.id if message.from_user else 0
         user_link = f"<a href=\"tg://user?id={user_id}\">{user_name}</a>" if user_id else f"<b>{user_name}</b>"
@@ -860,13 +850,9 @@ async def send_search_status(client: Client, chat_id: int, query: str) -> Messag
                 )
             )
 
-    @app.on_message(filters.command(["queue", "recent"]) & filters.group)
+    @app.on_message(cmd_filter(["queue", "cqueue", "recent"]))
     async def queue_command(client: Client, message: Message):
         chat_id = message.chat.id
-        if not is_group_bot_active(chat_id):
-            return
-        
-        # Check if anything is playing
         if chat_id not in player_manager.active_calls:
             await message.reply_text(make_card(f"{ROYAL_HEADER}⚠️ <b>Abhi kuch bhi play nahi ho raha!</b>"))
             return
@@ -898,7 +884,7 @@ async def send_search_status(client: Client, chat_id: int, query: str) -> Messag
         ])
         await message.reply_text(make_card(text), reply_markup=buttons)
 
-    @app.on_message(filters.command(["help", "helpmenu"]))
+    @app.on_message(cmd_filter(["help", "helpmenu"]))
     async def help_command(client: Client, message: Message):
         help_text = (
             f"Click the buttons below to get information about my commands.\n\n"
