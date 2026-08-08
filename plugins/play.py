@@ -41,19 +41,7 @@ def build_effects_markup(selected_effect: str, chat_id: int, requested_by_id: in
     buttons.append([InlineKeyboardButton("BACK", callback_data=f"fx_back|{chat_id}|{requested_by_id}", style="primary")])
     return InlineKeyboardMarkup(buttons)
 
-def gcmd(cmds):
-    if isinstance(cmds, str):
-        cmds = [cmds]
-    bot_name = Config.BOT_USERNAME or "Gameover_Music_bot"
-    all_cmds = []
-    for c in cmds:
-        c_clean = c.lstrip("/")
-        all_cmds.append(c_clean.lower())
-        all_cmds.append(f"{c_clean.lower()}@{bot_name.lower()}")
-        all_cmds.append(f"{c_clean.lower()}@{bot_name}")
-    return filters.command(all_cmds, prefixes=["/", "!", "."]) & filters.group
-
-def acmd(cmds):
+def cmd(cmds):
     if isinstance(cmds, str):
         cmds = [cmds]
     bot_name = Config.BOT_USERNAME or "Gameover_Music_bot"
@@ -73,7 +61,7 @@ def register(app: Client):
             title = message.chat.title or "Group Chat"
             update_group_info(message.chat.id, title)
 
-    @app.on_message(acmd(["start"]))
+    @app.on_message(cmd(["start"]))
     async def start_command(client: Client, message: Message):
         bot_username = Config.BOT_USERNAME or (await client.get_me()).username
         user_name = message.from_user.first_name if message.from_user else "User"
@@ -176,8 +164,10 @@ async def send_search_status(client: Client, chat_id: int, query: str) -> Messag
         )
     )
 
-    @app.on_message(gcmd(["vd", "video"]))
+    @app.on_message(cmd(["vd", "video"]))
     async def play_command(client: Client, message: Message):
+        if message.chat.type not in (enums.ChatType.GROUP, enums.ChatType.SUPERGROUP):
+            return
         chat_id = message.chat.id
         query = " ".join(message.command[1:]).strip() if len(message.command) > 1 else ""
         print(f"[Command] Received /vd in group {chat_id} | Query: '{query}'")
@@ -198,8 +188,10 @@ async def send_search_status(client: Client, chat_id: int, query: str) -> Messag
         req_id = message.from_user.id if message.from_user else 0
         asyncio.create_task(player_manager.play(chat_id, query, mode="video", status_msg=status_msg, requested_by=req_name, requested_by_id=req_id))
 
-    @app.on_message(gcmd(["audio", "ad"]))
+    @app.on_message(cmd(["audio", "ad"]))
     async def audio_command(client: Client, message: Message):
+        if message.chat.type not in (enums.ChatType.GROUP, enums.ChatType.SUPERGROUP):
+            return
         chat_id = message.chat.id
         query = " ".join(message.command[1:]).strip() if len(message.command) > 1 else ""
         print(f"[Command] Received /ad in group {chat_id} | Query: '{query}'")
@@ -220,8 +212,10 @@ async def send_search_status(client: Client, chat_id: int, query: str) -> Messag
         req_id = message.from_user.id if message.from_user else 0
         asyncio.create_task(player_manager.play(chat_id, query, mode="audio", status_msg=status_msg, requested_by=req_name, requested_by_id=req_id))
 
-    @app.on_message(gcmd(["playlist", "list"]))
+    @app.on_message(cmd(["playlist", "list"]))
     async def playlist_command(client: Client, message: Message):
+        if message.chat.type not in (enums.ChatType.GROUP, enums.ChatType.SUPERGROUP):
+            return
         chat_id = message.chat.id
         query = " ".join(message.command[1:]).strip() if len(message.command) > 1 else ""
         print(f"[Command] Received /list in group {chat_id} | Query: '{query}'")
@@ -270,8 +264,10 @@ async def send_search_status(client: Client, chat_id: int, query: str) -> Messag
             )
         )
 
-    @app.on_message(gcmd(["playlistaudio", "listaudio", "la"]))
+    @app.on_message(cmd(["playlistaudio", "listaudio", "la"]))
     async def playlist_audio_command(client: Client, message: Message):
+        if message.chat.type not in (enums.ChatType.GROUP, enums.ChatType.SUPERGROUP):
+            return
         chat_id = message.chat.id
         query = " ".join(message.command[1:]).strip() if len(message.command) > 1 else ""
         print(f"[Command] Received /la in group {chat_id} | Query: '{query}'")
@@ -319,8 +315,10 @@ async def send_search_status(client: Client, chat_id: int, query: str) -> Messag
             )
         )
 
-    @app.on_message(gcmd(["plresume", "playlistresume", "resumeplaylist"]))
+    @app.on_message(cmd(["plresume", "playlistresume", "resumeplaylist"]))
     async def pl_resume_command(client: Client, message: Message):
+        if message.chat.type not in (enums.ChatType.GROUP, enums.ChatType.SUPERGROUP):
+            return
         chat_id = message.chat.id
         if not is_group_bot_active(chat_id):
             return
@@ -369,8 +367,10 @@ async def send_search_status(client: Client, chat_id: int, query: str) -> Messag
             except Exception:
                 pass
 
-    @app.on_message(gcmd(["playlists", "myplaylists", "savedplaylists", "plhistory"]))
+    @app.on_message(cmd(["playlists", "myplaylists", "savedplaylists", "plhistory"]))
     async def group_playlists_history_command(client: Client, message: Message):
+        if message.chat.type not in (enums.ChatType.GROUP, enums.ChatType.SUPERGROUP):
+            return
         chat_id = message.chat.id
         if not is_group_bot_active(chat_id):
             return
@@ -477,8 +477,10 @@ async def send_search_status(client: Client, chat_id: int, query: str) -> Messag
             status_msg=query.message
         ))
 
-    @app.on_message(gcmd(["pause", "cpause"]))
+    @app.on_message(cmd(["pause", "cpause"]))
     async def pause_command(client: Client, message: Message):
+        if message.chat.type not in (enums.ChatType.GROUP, enums.ChatType.SUPERGROUP):
+            return
         chat_id = message.chat.id
         user_id = message.from_user.id if message.from_user else 0
         active_req_id = player_manager.active_requester_id.get(chat_id, 0)
@@ -505,8 +507,10 @@ async def send_search_status(client: Client, chat_id: int, query: str) -> Messag
         else:
             await message.reply_text(make_card(f"{ROYAL_HEADER}⚠️ <b>Abhi kuch bhi play nahi ho raha!</b>"))
 
-    @app.on_message(gcmd(["resume", "cresume"]))
+    @app.on_message(cmd(["resume", "cresume"]))
     async def resume_command(client: Client, message: Message):
+        if message.chat.type not in (enums.ChatType.GROUP, enums.ChatType.SUPERGROUP):
+            return
         chat_id = message.chat.id
         user_id = message.from_user.id if message.from_user else 0
         active_req_id = player_manager.active_requester_id.get(chat_id, 0)
@@ -533,8 +537,10 @@ async def send_search_status(client: Client, chat_id: int, query: str) -> Messag
         else:
             await message.reply_text(make_card(f"{ROYAL_HEADER}⚠️ <b>Kuch bhi paused nahi hai!</b>"))
 
-    @app.on_message(gcmd(["skip", "cskip", "next", "cnext", "seek", "cseek"]))
+    @app.on_message(cmd(["skip", "cskip", "next", "cnext", "seek", "cseek"]))
     async def skip_command(client: Client, message: Message):
+        if message.chat.type not in (enums.ChatType.GROUP, enums.ChatType.SUPERGROUP):
+            return
         chat_id = message.chat.id
         user_id = message.from_user.id if message.from_user else 0
         active_req_id = player_manager.active_requester_id.get(chat_id, 0)
@@ -616,8 +622,10 @@ async def send_search_status(client: Client, chat_id: int, query: str) -> Messag
         if not skipped:
             await message.reply_text(make_card(f"{ROYAL_HEADER}⏹ <b>Queue empty! Playback stopped.</b>"))
 
-    @app.on_message(gcmd(["stop", "cstop", "end", "cend"]))
+    @app.on_message(cmd(["stop", "cstop", "end", "cend"]))
     async def stop_command(client: Client, message: Message):
+        if message.chat.type not in (enums.ChatType.GROUP, enums.ChatType.SUPERGROUP):
+            return
         chat_id = message.chat.id
         user_id = message.from_user.id if message.from_user else 0
         active_req_id = player_manager.active_requester_id.get(chat_id, 0)
@@ -646,7 +654,7 @@ async def send_search_status(client: Client, chat_id: int, query: str) -> Messag
         )
 
     # ── Owner-Only Approved Control Commands ────────────────────────────────
-    @app.on_message(gcmd(["approvecontrol", "approvedcontrol", "approvecontroll", "aprovedcontroll", "aprovedcontrol", "approve", "approved"]))
+    @app.on_message(cmd(["approvecontrol", "approvedcontrol", "approvecontroll", "aprovedcontroll", "aprovedcontrol", "approve", "approved"]))
     async def approve_control_command(client: Client, message: Message):
         user_id = message.from_user.id if message.from_user else 0
         if user_id != Config.OWNER_ID and not is_sudo_user(user_id):
@@ -685,7 +693,7 @@ async def send_search_status(client: Client, chat_id: int, query: str) -> Messag
         )
         await message.reply_text(card)
 
-    @app.on_message(gcmd(["unapprovecontrol", "unapprovedcontrol", "unapprovecontroll", "unaprovedcontroll", "unaprovedcontrol", "unapprove", "unapproved"]))
+    @app.on_message(cmd(["unapprovecontrol", "unapprovedcontrol", "unapprovecontroll", "unaprovedcontroll", "unaprovedcontrol", "unapprove", "unapproved"]))
     async def unapprove_control_command(client: Client, message: Message):
         user_id = message.from_user.id if message.from_user else 0
         if user_id != Config.OWNER_ID and not is_sudo_user(user_id):
@@ -724,7 +732,7 @@ async def send_search_status(client: Client, chat_id: int, query: str) -> Messag
         )
         await message.reply_text(card)
 
-    @app.on_message(gcmd(["approvedusers", "approvelist"]))
+    @app.on_message(cmd(["approvedusers", "approvelist"]))
     async def approved_users_command(client: Client, message: Message):
         chat_id = message.chat.id
         from core.db import get_approved_users
@@ -808,7 +816,7 @@ async def send_search_status(client: Client, chat_id: int, query: str) -> Messag
         print("[System] Owner initiated process reload...")
         os._exit(0)
 
-    @app.on_message(gcmd(["shuffle", "cshuffle"]))
+    @app.on_message(cmd(["shuffle", "cshuffle"]))
     async def shuffle_command(client: Client, message: Message):
         chat_id = message.chat.id
         ok = player_manager.shuffle_queue(chat_id)
@@ -828,7 +836,7 @@ async def send_search_status(client: Client, chat_id: int, query: str) -> Messag
                 )
             )
 
-    @app.on_message(gcmd(["autoplays", "automode", "ap", "autoplay"]))
+    @app.on_message(cmd(["autoplays", "automode", "ap", "autoplay"]))
     async def autoplay_command(client: Client, message: Message):
         chat_id = message.chat.id
         user_name = message.from_user.first_name if message.from_user else "User"
@@ -858,7 +866,7 @@ async def send_search_status(client: Client, chat_id: int, query: str) -> Messag
                 )
             )
 
-    @app.on_message(gcmd(["queue", "cqueue", "recent"]))
+    @app.on_message(cmd(["queue", "cqueue", "recent"]))
     async def queue_command(client: Client, message: Message):
         chat_id = message.chat.id
         if chat_id not in player_manager.active_calls:
@@ -892,7 +900,7 @@ async def send_search_status(client: Client, chat_id: int, query: str) -> Messag
         ])
         await message.reply_text(make_card(text), reply_markup=buttons)
 
-    @app.on_message(acmd(["help", "helpmenu"]))
+    @app.on_message(cmd(["help", "helpmenu"]))
     async def help_command(client: Client, message: Message):
         help_text = (
             f"Click the buttons below to get information about my commands.\n\n"
