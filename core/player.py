@@ -535,38 +535,14 @@ class PlayerManager:
     async def _get_listener_count(self, chat_id: int) -> int:
         """Helper to fetch count of non-bot human listeners in Telegram voice chat."""
         try:
-            from pyrogram.raw.functions.phone import GetGroupCallParticipants
-            from pyrogram.raw.functions.channels import GetFullChannel
-            from pyrogram.raw.functions.messages import GetFullChat
-            from pyrogram.raw.types import InputGroupCall, InputPeerChannel, InputPeerChat
-
-            peer = await self._assistant.resolve_peer(chat_id)
-            call = None
-            if isinstance(peer, InputPeerChannel):
-                full = await self._assistant.invoke(GetFullChannel(channel=peer))
-                call = full.full_chat.call
-            elif isinstance(peer, InputPeerChat):
-                full = await self._assistant.invoke(GetFullChat(chat_id=chat_id))
-                call = full.full_chat.call
-                
-            if not call:
-                return 0
-
-            input_call = InputGroupCall(id=call.id, access_hash=call.access_hash)
-            participants = await self._assistant.invoke(GetGroupCallParticipants(
-                call=input_call,
-                ids=[],
-                sources=[],
-                offset="",
-                limit=100
-            ))
-            
+            # Use PyTgCalls participants list — always available
+            participants = await self._pytg.get_participants(chat_id)
             as_me = await self._assistant.get_me()
             bot_me = await self.app.get_me()
-            
             count = 0
-            for p in participants.participants:
-                if p.user_id not in (as_me.id, bot_me.id) and not getattr(p, "is_left", False):
+            for p in participants:
+                uid = getattr(p, "user_id", None) or getattr(p, "id", None)
+                if uid and uid not in (as_me.id, bot_me.id):
                     count += 1
             return count
         except Exception as e:
@@ -1337,16 +1313,12 @@ class PlayerManager:
         print(f"[Player] Initializing stream with Target Quality: {q_pref} | FPS: {fps_pref}")
         
 
-        # Studio Master Audio Equalization & Loudness Normalization
-        # -af loudnorm=I=-16:TP=-1.5:LRA=11,volume=1.25 gives crystal clear vocals and studio cinema audio
-        local_path = ensure_audio_track(local_path)
-
+        # PyTgCalls handles 48kHz resampling internally for WebRTC — no custom ffmpeg filter needed
         stream = SeekableMediaStream(
             media_path=local_path,
             audio_path=None,
             video_parameters=vid_params,
             audio_parameters=AudioQuality.STUDIO,
-            ffmpeg_parameters="-af aresample=48000",
             video_flags=MediaStream.Flags.REQUIRED if mode == "video" else MediaStream.Flags.IGNORE,
             audio_flags=MediaStream.Flags.REQUIRED,
         )
@@ -1388,7 +1360,6 @@ class PlayerManager:
                             audio_path=None,
                             video_parameters=vid_params,
                             audio_parameters=AudioQuality.STUDIO,
-                            ffmpeg_parameters="-af aresample=48000",
                             video_flags=MediaStream.Flags.IGNORE,
                             audio_flags=MediaStream.Flags.REQUIRED,
                         )
