@@ -46,7 +46,7 @@ def cmd(cmds):
         cmds = [cmds]
     clean_cmds = [c.lstrip("/").lower() for c in cmds]
 
-    async def func(flt, client, message: Message):
+    def func(flt, client, message: Message):
         text = (message.text or message.caption or "").strip()
         if not text.startswith(("/", "!", ".")):
             return False
