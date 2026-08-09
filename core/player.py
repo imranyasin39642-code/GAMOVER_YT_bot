@@ -49,6 +49,23 @@ async def download_file(url: str, dest_path: str, progress_callback=None, expect
                         except Exception:
                             pass
 
+                    # Extract clen or cl query parameter from URL (YouTube & Invidious stream URLs contain exact byte length)
+                    if total_size == 0:
+                        try:
+                            import urllib.parse
+                            for check_u in [url, str(response.url)]:
+                                if check_u:
+                                    parsed_u = urllib.parse.urlparse(check_u)
+                                    qs = urllib.parse.parse_qs(parsed_u.query)
+                                    if 'clen' in qs and qs['clen'][0].isdigit():
+                                        total_size = int(qs['clen'][0])
+                                        break
+                                    elif 'cl' in qs and qs['cl'][0].isdigit():
+                                        total_size = int(qs['cl'][0])
+                                        break
+                        except Exception:
+                            pass
+
                     if total_size == 0 and expected_size > 0:
                         total_size = expected_size
 
@@ -256,8 +273,9 @@ async def download_song_ytdlp(youtube_url: str, dest_path: str, mode: str, progr
         title = res.get("title", "YouTube Video")
         if title_callback and title != "YouTube Video":
             title_callback(title)
-        print(f"[Player/Tier2] Resolved Stream URL: {title[:35]} | Downloading...")
-        ok = await download_file(stream_url, dest_path, progress_callback)
+        expected_sz = int(res.get("filesize") or (res.get("duration", 0) * (750000 if mode == "video" else 30000)))
+        print(f"[Player/Tier2] Resolved Stream URL: {title[:35]} | Expected Size: {expected_sz // (1024*1024)}MB | Downloading...")
+        ok = await download_file(stream_url, dest_path, progress_callback, expected_size=expected_sz)
         if ok and os.path.exists(dest_path) and os.path.getsize(dest_path) > 5000:
             ensure_audio_track(dest_path)
             save_to_cache(
@@ -1146,6 +1164,8 @@ class PlayerManager:
                 self.stream_title[chat_id] = resolved_title
 
             last_progress_edit = [0.0]
+            est_cache = [0]
+
             async def progress_cb(pct, down, tot, start):
                 now = time.time()
                 if now - last_progress_edit[0] < 3.0 and pct < 100:
@@ -1153,15 +1173,23 @@ class PlayerManager:
                 last_progress_edit[0] = now
 
                 real_tot = tot
-                if not real_tot:
-                    dur_s = self.stream_duration.get(chat_id, 0)
-                    real_tot = dur_s * (200000 if mode == "video" else 40000)
-                    if real_tot < 5 * 1024 * 1024:
-                        real_tot = 12 * 1024 * 1024 if mode == "video" else 5 * 1024 * 1024
+                is_estimated = False
 
-                # Auto-expand real_tot dynamically if downloaded bytes exceed estimated real_tot!
-                if not tot and down >= real_tot:
-                    real_tot = int(down * 1.15)
+                if not real_tot:
+                    is_estimated = True
+                    if est_cache[0] > 0:
+                        real_tot = est_cache[0]
+                    else:
+                        dur_s = self.stream_duration.get(chat_id, 0)
+                        base_est = dur_s * (750000 if mode == "video" else 30000)
+                        if base_est < 15 * 1024 * 1024:
+                            base_est = 35 * 1024 * 1024 if mode == "video" else 8 * 1024 * 1024
+                        real_tot = base_est
+                        est_cache[0] = real_tot
+
+                    if down >= real_tot:
+                        real_tot = int(down * 1.25)
+                        est_cache[0] = real_tot
 
                 real_pct = pct
                 if not pct or pct == 0:
@@ -1180,7 +1208,7 @@ class PlayerManager:
                 filled = min(10, max(0, int(real_pct / 10)))
                 bar = "■" * filled + "□" * (10 - filled)
 
-                tot_label = f"{tot_mb:.1f} MB" if tot else f"~{tot_mb:.1f} MB"
+                tot_label = f"{tot_mb:.1f} MB" if not is_estimated else f"~{tot_mb:.1f} MB"
                 size_str = f"{down_mb:.1f} MB / {tot_label}"
                 cur_t = self.stream_title.get(chat_id) or title
 
