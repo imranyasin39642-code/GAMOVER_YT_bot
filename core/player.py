@@ -1790,6 +1790,7 @@ class PlayerManager:
         # Clear memory queues & pending states
         self.active_calls.discard(chat_id)
         self.in_call_chats.discard(chat_id)
+        self.autoplay_chats.discard(chat_id)
         self.active_files.pop(chat_id, None)
         self.queues.pop(chat_id, None)
         self.pending_playlists.pop(chat_id, None)
@@ -1811,6 +1812,7 @@ class PlayerManager:
         
         self.active_calls.clear()
         self.in_call_chats.clear()
+        self.autoplay_chats.clear()
         self.active_files.clear()
         self.queues.clear()
         self.pending_playlists.clear()

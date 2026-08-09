@@ -691,6 +691,14 @@ def register(app: Client):
         user_name = message.from_user.first_name if message.from_user else "User"
         user_id = message.from_user.id if message.from_user else 0
         user_link = f"<a href=\"tg://user?id={user_id}\">{user_name}</a>" if user_id else f"<b>{user_name}</b>"
+
+        if chat_id not in player_manager.active_calls:
+            await message.reply_text(make_card(
+                f"{ROYAL_HEADER}⚠️ <b>No Active Voice Chat Stream!</b>\n\n"
+                f"Please start streaming a track first (e.g. <code>/vd song</code> or <code>/ad song</code>) before enabling Auto-Play."
+            ))
+            return
+
         if chat_id in player_manager.autoplay_chats:
             player_manager.autoplay_chats.remove(chat_id)
             await message.reply_text(make_card(
@@ -712,7 +720,7 @@ def register(app: Client):
     async def queue_command(client: Client, message: Message):
         chat_id = message.chat.id
         if chat_id not in player_manager.active_calls:
-            await message.reply_text(make_card(f"{ROYAL_HEADER}⚠️ <b>Abhi kuch bhi play nahi ho raha!</b>"))
+            await message.reply_text(make_card(f"{ROYAL_HEADER}⚠️ <b>Nothing is currently playing!</b>"))
             return
         current_title = player_manager.stream_title.get(chat_id, "Unknown Title")
         queued_songs = player_manager.queues.get(chat_id, [])
@@ -772,6 +780,9 @@ def register(app: Client):
             else:
                 await query.answer("⚠️ Minimum 2 queued songs needed to shuffle!", show_alert=True)
         elif action == "cb_autoplay":
+            if chat_id not in player_manager.active_calls:
+                await query.answer("⚠️ No active Voice Chat stream! Start streaming a song first.", show_alert=True)
+                return
             if chat_id in player_manager.autoplay_chats:
                 player_manager.autoplay_chats.remove(chat_id)
                 await query.answer("🛑 Auto-Play Disabled!", show_alert=True)
