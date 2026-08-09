@@ -109,7 +109,7 @@ async def download_file(url: str, dest_path: str, progress_callback=None, expect
     return False
 
 
-def auto_clean_downloads(max_folder_mb: int = 800, keep_files: set = None, max_age_days: int = 3):
+def auto_clean_downloads(max_folder_mb: int = 10240, keep_files: set = None, max_age_days: int = 7):
     """Clean downloads directory if total size exceeds limit OR files are older than max_age_days (3 days)."""
     downloads_dir = Config.DOWNLOADS_DIR
     if not os.path.exists(downloads_dir):
@@ -244,7 +244,7 @@ async def download_song_ytdlp(youtube_url: str, dest_path: str, mode: str, progr
     Downloads media directly using high-speed aiohttp stream.
     """
     import shutil
-    auto_clean_downloads(max_folder_mb=800)
+    auto_clean_downloads(max_folder_mb=10240)
 
     if os.path.exists(dest_path) and os.path.getsize(dest_path) > 5000:
         return True
