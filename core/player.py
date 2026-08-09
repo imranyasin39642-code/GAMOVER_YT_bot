@@ -719,15 +719,8 @@ class PlayerManager:
                         await asyncio.sleep(2)
 
                     if rec and rec.get("url"):
+                        # Silently start next track — no group message during autoplay search
                         print(f"[Player/AutoPlay] Auto-playing recommendation: {rec.get('title')}")
-                        try:
-                            from bot import send_styled
-                            await send_styled(
-                                chat_id,
-                                f"🔀 <b>Smart Auto-Play:</b> Now streaming: <code>{rec.get('title', '')}</code>"
-                            )
-                        except Exception:
-                            pass
                         await self.play(
                             chat_id=chat_id,
                             youtube_url=rec["url"],
@@ -735,14 +728,9 @@ class PlayerManager:
                             requested_by="Smart AutoPlay 🤖"
                         )
                     else:
-                        # Autoplay could not find recommendation — notify and idle
+                        # Autoplay could not find recommendation after retries — silently stop
                         print(f"[Player/AutoPlay] No recommendation found after retries. Stopping autoplay.")
                         self.autoplay_chats.discard(chat_id)
-                        try:
-                            from bot import send_styled
-                            await send_styled(chat_id, "⚠️ <b>Smart Auto-Play:</b> Could not find a recommendation. Auto-Play disabled.")
-                        except Exception:
-                            pass
                         self._start_idle_timer(chat_id)
 
                 asyncio.create_task(_autoplay_next())
@@ -948,7 +936,9 @@ class PlayerManager:
                     await self.app.send_message(chat_id, make_card("❌ <b>No YouTube results found!</b>\nPlease try searching with a different track name."))
                 return False
             youtube_url = result["url"]
-            print(f"[Player] Search resolved to: {youtube_url}")
+            # Capture fresh title from search — will override any stale cached title
+            _fresh_title = result.get("title") or ""
+            print(f"[Player] Search resolved to: {youtube_url} | Title: {_fresh_title}")
 
         # ── YouTube Playlist Detection and Processing ─────────────────────
         if "list=" in youtube_url or "playlist" in youtube_url:
@@ -1124,13 +1114,17 @@ class PlayerManager:
         # 1. Check local DB cache (also verify file exists on disk — stale cache guard)
         cached = get_cached_item(video_id, mode)
         local_path = None
+        # Use fresh title from search if available, otherwise fall back to cached title
+        _fresh_title = locals().get("_fresh_title", "")
         title = "YouTube Stream"
 
         if cached:
             cached_path = cached.get("file_path", "")
             if cached_path and os.path.exists(cached_path) and os.path.getsize(cached_path) > 5000:
                 local_path = cached_path
-                title = cached["title"]
+                # Prefer fresh title from search query (e.g. /vd blue eyes → "Blue Eyes")
+                # Only use stale cached title if no fresh one available
+                title = _fresh_title if _fresh_title else cached["title"]
                 self.stream_thumbnail[chat_id] = cached.get("thumbnail") or f"https://img.youtube.com/vi/{video_id}/hqdefault.jpg"
                 self.stream_duration[chat_id] = int(cached.get("duration") or 0)
             else:
@@ -1312,6 +1306,9 @@ class PlayerManager:
         vid_params, q_pref, fps_pref, _ = get_configured_video_parameters()
         print(f"[Player] Initializing stream with Target Quality: {q_pref} | FPS: {fps_pref}")
         
+
+        # Ensure audio track exists in file (merges silent AAC if video-only file)
+        local_path = ensure_audio_track(local_path)
 
         # PyTgCalls handles 48kHz resampling internally for WebRTC — no custom ffmpeg filter needed
         stream = SeekableMediaStream(
