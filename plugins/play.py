@@ -407,7 +407,7 @@ def register(app: Client):
         if ok:
             await message.reply_text(make_card(f"{ROYAL_HEADER}⏸ <b>Playback Paused!</b>"))
         else:
-            await message.reply_text(make_card(f"{ROYAL_HEADER}⚠️ <b>Abhi kuch bhi play nahi ho raha!</b>"))
+            await message.reply_text(make_card(f"{ROYAL_HEADER}⚠️ <b>Nothing is currently playing!</b>"))
 
     @app.on_message(cmd(["resume", "cresume"]))
     async def resume_command(client: Client, message: Message):
@@ -434,7 +434,7 @@ def register(app: Client):
         if ok:
             await message.reply_text(make_card(f"{ROYAL_HEADER}▶ <b>Playback Resumed!</b>"))
         else:
-            await message.reply_text(make_card(f"{ROYAL_HEADER}⚠️ <b>Kuch bhi paused nahi hai!</b>"))
+            await message.reply_text(make_card(f"{ROYAL_HEADER}⚠️ <b>Nothing is currently paused!</b>"))
 
     @app.on_message(cmd(["skip", "cskip", "next", "cnext", "seek", "cseek"]))
     async def skip_command(client: Client, message: Message):
@@ -445,7 +445,7 @@ def register(app: Client):
         active_req_id = player_manager.active_requester_id.get(chat_id, 0)
         from core.db import is_user_approved
         if chat_id not in player_manager.active_calls:
-            await message.reply_text(make_card(f"{ROYAL_HEADER}⚠️ <b>Abhi kuch bhi play nahi ho raha!</b>"))
+            await message.reply_text(make_card(f"{ROYAL_HEADER}⚠️ <b>Nothing is currently playing!</b>"))
             return
         is_allowed = False
         if user_id in (Config.OWNER_ID, active_req_id) or is_sudo_user(user_id) or is_user_approved(chat_id, user_id):
@@ -468,7 +468,7 @@ def register(app: Client):
         if args or cmd_name in ("seek", "cseek"):
             if not args:
                 await message.reply_text(make_card(
-                    f"{ROYAL_HEADER}❌ <b>Time duration specify karein!</b>\n\n"
+                    f"{ROYAL_HEADER}❌ <b>Please specify a time duration!</b>\n\n"
                     f"👉 <b>Examples:</b>\n• <code>/seek 10s</code>\n• <code>/seek 1m</code>\n• <code>/skip 30s</code>"
                 ))
                 return

@@ -671,10 +671,11 @@ class PlayerManager:
 
             print(f"[Player] Stream ended in chat {chat_id}")
             
-            # Remove from active_calls BEFORE calling play()
-            self.active_calls.discard(chat_id)
+            # Clear stale file refs but keep active_calls alive so play() can re-add
             self.active_files.pop(chat_id, None)
             self.active_requester_id.pop(chat_id, None)
+            # Discard from active_calls here — play() will re-add when new stream starts
+            self.active_calls.discard(chat_id)
             
             # Queue management: Play next song if available
             if chat_id in self.queues and self.queues[chat_id]:
@@ -720,35 +721,61 @@ class PlayerManager:
                                 pass
 
                 asyncio.create_task(_safe_play_next(next_song))
-            else:
-                # Queue empty — check if Auto-Play is enabled for this chat
-                if chat_id in self.autoplay_chats:
-                    last_t = self.last_played_title.get(chat_id, "")
-                    last_v = self.last_played_videoid.get(chat_id, "")
-                    mode = self.last_played_mode.get(chat_id, "video")
-                    
-                    try:
-                        from bot import send_styled
-                        await send_styled(chat_id, f"🔀 <b>Smart Auto-Play:</b> Finding related YouTube recommendations...")
-                    except Exception:
-                        pass
-                        
+
+            elif chat_id in self.autoplay_chats:
+                # Queue empty but Autoplay is ON — find and stream a recommendation
+                last_t = self.last_played_title.get(chat_id, "")
+                last_v = self.last_played_videoid.get(chat_id, "")
+                mode = self.last_played_mode.get(chat_id, "video")
+                print(f"[Player/AutoPlay] Queue empty. Finding recommendation for: {last_t} ({mode})")
+
+                async def _autoplay_next():
                     from core.scrapers import get_youtube_recommendations
-                    rec = await get_youtube_recommendations(last_t, last_v)
+                    rec = None
+                    # Retry up to 3 times in case of network hiccup
+                    for attempt in range(1, 4):
+                        try:
+                            rec = await get_youtube_recommendations(last_t, last_v)
+                            if rec and rec.get("url"):
+                                break
+                        except Exception as e:
+                            print(f"[Player/AutoPlay] Rec attempt {attempt} failed: {e}")
+                        await asyncio.sleep(2)
+
                     if rec and rec.get("url"):
                         print(f"[Player/AutoPlay] Auto-playing recommendation: {rec.get('title')}")
-                        asyncio.create_task(self.play(
+                        try:
+                            from bot import send_styled
+                            await send_styled(
+                                chat_id,
+                                f"🔀 <b>Smart Auto-Play:</b> Now streaming: <code>{rec.get('title', '')}</code>"
+                            )
+                        except Exception:
+                            pass
+                        await self.play(
                             chat_id=chat_id,
                             youtube_url=rec["url"],
                             mode=mode,
                             requested_by="Smart AutoPlay 🤖"
-                        ))
-                        return
-                
-                # Otherwise, notify and start 5-min idle timer
+                        )
+                    else:
+                        # Autoplay could not find recommendation — notify and idle
+                        print(f"[Player/AutoPlay] No recommendation found after retries. Stopping autoplay.")
+                        self.autoplay_chats.discard(chat_id)
+                        try:
+                            from bot import send_styled
+                            await send_styled(chat_id, "⚠️ <b>Smart Auto-Play:</b> Could not find a recommendation. Auto-Play disabled.")
+                        except Exception:
+                            pass
+                        self._start_idle_timer(chat_id)
+
+                asyncio.create_task(_autoplay_next())
+
+            else:
+                # Queue empty and Autoplay is OFF — notify and start idle timer
                 try:
                     from bot import send_styled
-                    await send_styled(chat_id, "<b>Playback ended. Queue is empty.</b>")
+                    await send_styled(chat_id, "<b>✅ Playback ended. Queue is empty.</b>")
                 except Exception:
                     pass
                 self._start_idle_timer(chat_id)
@@ -1563,19 +1590,19 @@ class PlayerManager:
     async def skip(self, chat_id: int) -> bool:
         """Skip current track → play next in queue, or trigger autoplay in matching mode if queue is empty."""
         self._cancel_idle_timer(chat_id)
-        
+
         if chat_id in self.queues and self.queues[chat_id]:
             next_song = self.queues[chat_id].pop(0)
             print(f"[Player] Skip → next: {next_song['title']} in {chat_id}")
-            
-            # CRITICAL: remove from active_calls so play() starts fresh instead of re-queuing
+
+            # Clear stale refs — play() will re-add to active_calls when stream starts
             self.active_calls.discard(chat_id)
             self.active_files.pop(chat_id, None)
             self.active_requester_id.pop(chat_id, None)
-            
+
             status_msg = await self.app.send_message(
                 chat_id,
-                f"{ROYAL_HEADER}⏭ <b>Skipping... Next track:</b> <code>{next_song['title']}</code>"
+                f"{ROYAL_HEADER}⏭ <b>Skipping...</b> Next track: <code>{next_song['title']}</code>"
             )
             asyncio.create_task(self.play(
                 chat_id=chat_id,
@@ -1589,23 +1616,34 @@ class PlayerManager:
                 total_tracks=next_song.get("total_tracks", 0)
             ))
             return True
+
         elif chat_id in self.autoplay_chats:
             last_t = self.stream_title.get(chat_id) or self.last_played_title.get(chat_id, "")
-            last_v = self.stream_video_id.get(chat_id) if hasattr(self, 'stream_video_id') and chat_id in self.stream_video_id else self.last_played_videoid.get(chat_id, "")
+            last_v = self.last_played_videoid.get(chat_id, "")
             mode = self.last_played_mode.get(chat_id, "video")
-            
-            print(f"[Player/AutoPlay] Skip triggered on empty queue! Finding Autoplay recommendation ({mode})...")
+            print(f"[Player/AutoPlay] Skip on empty queue. Finding recommendation ({mode}) for: {last_t}")
+
+            # Clear stale refs — play() will re-add to active_calls when new stream starts
             self.active_calls.discard(chat_id)
             self.active_files.pop(chat_id, None)
             self.active_requester_id.pop(chat_id, None)
 
             status_msg = await self.app.send_message(
                 chat_id,
-                f"{ROYAL_HEADER}⏭ <b>Skipping... Smart Auto-Play:</b> Finding next recommendation ({mode.title()})..."
+                f"{ROYAL_HEADER}🔀 <b>Smart Auto-Play:</b> Finding next {mode.title()} recommendation..."
             )
-            
+
             from core.scrapers import get_youtube_recommendations
-            rec = await get_youtube_recommendations(last_t, last_v)
+            rec = None
+            for attempt in range(1, 4):
+                try:
+                    rec = await get_youtube_recommendations(last_t, last_v)
+                    if rec and rec.get("url"):
+                        break
+                except Exception as e:
+                    print(f"[Player/AutoPlay] Skip rec attempt {attempt} failed: {e}")
+                await asyncio.sleep(2)
+
             if rec and rec.get("url"):
                 print(f"[Player/AutoPlay] Skip → Auto-playing recommendation: {rec.get('title')} ({mode})")
                 asyncio.create_task(self.play(
@@ -1616,6 +1654,18 @@ class PlayerManager:
                     requested_by="Smart AutoPlay 🤖"
                 ))
                 return True
+            else:
+                # Could not find recommendation — disable autoplay and stop
+                print(f"[Player/AutoPlay] Skip: No recommendation found. Disabling autoplay.")
+                self.autoplay_chats.discard(chat_id)
+                try:
+                    await status_msg.edit_text(
+                        f"{ROYAL_HEADER}⚠️ <b>Smart Auto-Play:</b> Could not find a recommendation. Auto-Play disabled."
+                    )
+                except Exception:
+                    pass
+                await self.stop(chat_id)
+                return False
 
         # Queue is empty and Auto-Play is OFF — fully stop
         await self.stop(chat_id)
