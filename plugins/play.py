@@ -694,16 +694,18 @@ def register(app: Client):
         if chat_id in player_manager.autoplay_chats:
             player_manager.autoplay_chats.remove(chat_id)
             await message.reply_text(make_card(
-                f"{ROYAL_HEADER}<b>Smart Auto-Play Mode Disabled!</b>\n\n"
-                f"• <b>Status:</b> <code>OFF</code>\n• <b>Toggled By:</b> {user_link}\n\n"
-                f"<i>Playback will stop when queue finishes.</i>"
+                f"{ROYAL_HEADER}🛑 <b>Auto-Play Mode Disabled!</b>\n\n"
+                f"• <b>Status:</b> <code>OFF</code>\n"
+                f"• <b>Toggled By:</b> {user_link}"
             ))
         else:
             player_manager.autoplay_chats.add(chat_id)
+            cur_mode = player_manager.last_played_mode.get(chat_id, "video").title()
             await message.reply_text(make_card(
-                f"{ROYAL_HEADER}<b>Smart Auto-Play Mode Enabled!</b>\n\n"
-                f"• <b>Status:</b> <code>ON</code>\n• <b>Toggled By:</b> {user_link}\n\n"
-                f"<i>YouTube recommendations will automatically play when queue finishes.</i>"
+                f"{ROYAL_HEADER}🔀 <b>Smart Auto-Play Mode Enabled!</b>\n\n"
+                f"• <b>Status:</b> <code>ON</code>\n"
+                f"• <b>Mode:</b> <code>{cur_mode}</code>\n"
+                f"• <b>Toggled By:</b> {user_link}"
             ))
 
     @app.on_message(cmd(["queue", "cqueue", "recent"]))

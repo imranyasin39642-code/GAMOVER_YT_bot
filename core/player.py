@@ -1496,11 +1496,24 @@ class PlayerManager:
                 )
             )
 
-            # Silently pre-download ONLY the NEXT 1 upcoming song (saves disk space & bandwidth)
+            # Silently pre-download ONLY the NEXT 1 upcoming song or Autoplay recommendation
             queue_snapshot = list(self.queues.get(chat_id, [])[:1])
-            for i, next_track in enumerate(queue_snapshot):
-                print(f"[Player] Pre-downloading queued track #{i+1}: {next_track['title']}")
-                asyncio.create_task(self._background_pre_download(chat_id, next_track["url"], mode, next_track["title"]))
+            if queue_snapshot:
+                for i, next_track in enumerate(queue_snapshot):
+                    print(f"[Player] Pre-downloading queued track #{i+1}: {next_track['title']}")
+                    asyncio.create_task(self._background_pre_download(chat_id, next_track["url"], mode, next_track["title"]))
+            elif chat_id in self.autoplay_chats:
+                async def _pre_download_autoplay():
+                    try:
+                        from core.scrapers import get_youtube_recommendations
+                        v_id = extract_video_id(youtube_url)
+                        rec = await get_youtube_recommendations(title, v_id)
+                        if rec and rec.get("url"):
+                            print(f"[Player/AutoPlay] Pre-downloading autoplay recommendation: {rec.get('title')} ({mode})")
+                            await self._background_pre_download(chat_id, rec["url"], mode, rec.get("title", ""))
+                    except Exception as e:
+                        print(f"[Player/AutoPlay] Pre-download note: {e}")
+                asyncio.create_task(_pre_download_autoplay())
 
             return True
 
@@ -1552,7 +1565,7 @@ class PlayerManager:
             return False
 
     async def skip(self, chat_id: int) -> bool:
-        """Skip current track → play next in queue, or stop if queue is empty."""
+        """Skip current track → play next in queue, or trigger autoplay in matching mode if queue is empty."""
         self._cancel_idle_timer(chat_id)
         
         if chat_id in self.queues and self.queues[chat_id]:
@@ -1580,10 +1593,37 @@ class PlayerManager:
                 total_tracks=next_song.get("total_tracks", 0)
             ))
             return True
-        else:
-            # Queue is empty — fully stop
-            await self.stop(chat_id)
-            return False
+        elif chat_id in self.autoplay_chats:
+            last_t = self.stream_title.get(chat_id) or self.last_played_title.get(chat_id, "")
+            last_v = self.stream_video_id.get(chat_id) if hasattr(self, 'stream_video_id') and chat_id in self.stream_video_id else self.last_played_videoid.get(chat_id, "")
+            mode = self.last_played_mode.get(chat_id, "video")
+            
+            print(f"[Player/AutoPlay] Skip triggered on empty queue! Finding Autoplay recommendation ({mode})...")
+            self.active_calls.discard(chat_id)
+            self.active_files.pop(chat_id, None)
+            self.active_requester_id.pop(chat_id, None)
+
+            status_msg = await self.app.send_message(
+                chat_id,
+                f"{ROYAL_HEADER}⏭ <b>Skipping... Smart Auto-Play:</b> Finding next recommendation ({mode.title()})..."
+            )
+            
+            from core.scrapers import get_youtube_recommendations
+            rec = await get_youtube_recommendations(last_t, last_v)
+            if rec and rec.get("url"):
+                print(f"[Player/AutoPlay] Skip → Auto-playing recommendation: {rec.get('title')} ({mode})")
+                asyncio.create_task(self.play(
+                    chat_id=chat_id,
+                    youtube_url=rec["url"],
+                    mode=mode,
+                    status_msg=status_msg,
+                    requested_by="Smart AutoPlay 🤖"
+                ))
+                return True
+
+        # Queue is empty and Auto-Play is OFF — fully stop
+        await self.stop(chat_id)
+        return False
 
     async def seek(self, chat_id: int, seconds: int) -> bool:
         """
