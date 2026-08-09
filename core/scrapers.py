@@ -78,29 +78,68 @@ async def search_youtube(query: str) -> Optional[Dict[str, str]]:
     return None
 
 
-async def get_youtube_recommendations(last_title: str, last_video_id: str = "") -> Optional[Dict[str, str]]:
-    """Fetch next related song recommendation from YouTube for Auto-Play."""
+async def get_youtube_recommendations(
+    last_title: str,
+    last_video_id: str = "",
+    exclude_ids: set = None
+) -> Optional[Dict[str, str]]:
+    """Fetch next DIFFERENT related song recommendation from YouTube for Auto-Play.
+    
+    Args:
+        last_title: Title of the song that just finished.
+        last_video_id: Video ID of the song that just finished (excluded from recs).
+        exclude_ids: Optional set of video IDs to exclude (prevents recent repeats).
+    """
+    excluded = set(exclude_ids or set())
+    if last_video_id:
+        excluded.add(last_video_id)
+
     if last_video_id:
         try:
             connector = get_doh_connector()
             headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
             async with aiohttp.ClientSession(connector=connector) as session:
-                async with session.get(f"https://www.youtube.com/watch?v={last_video_id}", headers=headers, timeout=aiohttp.ClientTimeout(total=4)) as resp:
+                async with session.get(
+                    f"https://www.youtube.com/watch?v={last_video_id}",
+                    headers=headers,
+                    timeout=aiohttp.ClientTimeout(total=6)
+                ) as resp:
                     if resp.status == 200:
                         html = await resp.text()
                         matches = re.findall(r'"videoId":"([a-zA-Z0-9_-]{11})"', html)
+                        # Collect all unique candidates that are NOT in the excluded set
+                        seen = set()
+                        candidates = []
                         for v_id in matches:
-                            if v_id != last_video_id:
-                                # Find title for recommended video_id
-                                title_match = re.search(r'"videoId":"' + re.escape(v_id) + r'".*?"title":\{"runs":\[\{"text":"([^"]+)"', html)
+                            if v_id not in excluded and v_id not in seen:
+                                seen.add(v_id)
+                                title_match = re.search(
+                                    r'"videoId":"' + re.escape(v_id) + r'".*?"title":\{"runs":\[\{"text":"([^"]+)"',
+                                    html
+                                )
                                 title = title_match.group(1) if title_match else "Related Track"
-                                return {"video_id": v_id, "url": f"https://www.youtube.com/watch?v={v_id}", "title": title}
+                                candidates.append({"video_id": v_id, "url": f"https://www.youtube.com/watch?v={v_id}", "title": title})
+                                if len(candidates) >= 10:
+                                    break
+                        if candidates:
+                            # Pick from the top 5 randomly to avoid always returning the same first result
+                            import random
+                            pick = random.choice(candidates[:5])
+                            print(f"[AutoPlay] Picked recommendation: {pick['title']} ({pick['video_id']})")
+                            return pick
         except Exception as e:
             print(f"[AutoPlay] Recommendation parse note: {e}")
 
-    # Fallback search query
-    query = f"{last_title} mix" if last_title else "top trending music"
-    return await search_youtube(query)
+    # Fallback: search a varied query using parts of title + mix/lofi/hits keywords
+    import random
+    suffixes = ["mix", "lofi", "hits 2024", "best songs", "chill", "mashup", "trending"]
+    query = f"{last_title} {random.choice(suffixes)}" if last_title else "top trending music 2024"
+    result = await search_youtube(query)
+    # If fallback returned the same video, try once more with different suffix
+    if result and result.get("video_id") in excluded:
+        query2 = f"{last_title} {random.choice(suffixes)}" if last_title else "new music 2024"
+        result = await search_youtube(query2)
+    return result
 
 
 # Multi-layer scraper sequence for guaranteed 100% bypass of YouTube bot/cookie checks

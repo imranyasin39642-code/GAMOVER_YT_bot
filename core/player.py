@@ -339,6 +339,8 @@ class PlayerManager:
         self.last_played_title: dict[int, str] = {}    # chat_id -> last played track title
         self.last_played_videoid: dict[int, str] = {}  # chat_id -> last played video ID
         self.last_played_mode: dict[int, str] = {}     # chat_id -> last played mode (video/audio)
+        self.autoplay_recent_ids: dict[int, list] = {} # chat_id -> list of recently played video IDs (anti-repeat)
+        self.autoplay_next_rec: dict[int, dict] = {}   # chat_id -> pre-fetched next autoplay recommendation
         self.listener_monitors: dict[int, asyncio.Task] = {} # chat_id -> 0-listener background monitor task
 
     def shuffle_queue(self, chat_id: int) -> bool:
@@ -707,25 +709,41 @@ class PlayerManager:
 
                 async def _autoplay_next():
                     from core.scrapers import get_youtube_recommendations
-                    rec = None
-                    # Retry up to 3 times in case of network hiccup
-                    for attempt in range(1, 4):
-                        try:
-                            rec = await get_youtube_recommendations(last_t, last_v)
-                            if rec and rec.get("url"):
-                                break
-                        except Exception as e:
-                            print(f"[Player/AutoPlay] Rec attempt {attempt} failed: {e}")
-                        await asyncio.sleep(2)
+
+                    # Build exclude set from recently played IDs to avoid repeats
+                    recent = self.autoplay_recent_ids.get(chat_id, [])
+                    exclude = set(recent)
+
+                    # Check if we pre-fetched a recommendation already
+                    rec = self.autoplay_next_rec.pop(chat_id, None)
+                    if rec and rec.get("video_id") in exclude:
+                        rec = None  # Pre-fetch was a repeat — discard
+
+                    if not rec:
+                        # Fetch fresh recommendation with anti-repeat exclusion
+                        for attempt in range(1, 4):
+                            try:
+                                rec = await get_youtube_recommendations(last_t, last_v, exclude_ids=exclude)
+                                if rec and rec.get("url"):
+                                    break
+                            except Exception as e:
+                                print(f"[Player/AutoPlay] Rec attempt {attempt} failed: {e}")
+                            await asyncio.sleep(2)
 
                     if rec and rec.get("url"):
+                        # Track this video as recently played (keep last 15)
+                        rec_vid = rec.get("video_id", "")
+                        recent_list = self.autoplay_recent_ids.get(chat_id, [])
+                        recent_list.append(rec_vid)
+                        self.autoplay_recent_ids[chat_id] = recent_list[-15:]  # Keep last 15 only
+
                         # Silently start next track — no group message during autoplay search
-                        print(f"[Player/AutoPlay] Auto-playing recommendation: {rec.get('title')}")
+                        print(f"[Player/AutoPlay] Auto-playing recommendation: {rec.get('title')} ({rec_vid})")
                         await self.play(
                             chat_id=chat_id,
                             youtube_url=rec["url"],
                             mode=mode,
-                            requested_by="Smart AutoPlay 🤖"
+                            requested_by="GAMEOVER AutoPlay 🎬"
                         )
                     else:
                         # Autoplay could not find recommendation after retries — silently stop
@@ -1373,6 +1391,13 @@ class PlayerManager:
             self.last_played_title[chat_id] = title
             self.last_played_videoid[chat_id] = video_id
             self.last_played_mode[chat_id] = mode
+
+            # Track this video in recent IDs for autoplay anti-repeat
+            recent_list = self.autoplay_recent_ids.get(chat_id, [])
+            if video_id and video_id not in recent_list:
+                recent_list.append(video_id)
+                self.autoplay_recent_ids[chat_id] = recent_list[-15:]
+
             self._start_listener_monitor(chat_id)
 
             # Ensure total stream duration is resolved for live progress bar timer
@@ -1613,13 +1638,17 @@ class PlayerManager:
                 await asyncio.sleep(2)
 
             if rec and rec.get("url"):
+                rec_vid = rec.get("video_id", "")
+                recent_list = self.autoplay_recent_ids.get(chat_id, [])
+                recent_list.append(rec_vid)
+                self.autoplay_recent_ids[chat_id] = recent_list[-15:]
                 print(f"[Player/AutoPlay] Skip → Auto-playing recommendation: {rec.get('title')} ({mode})")
                 asyncio.create_task(self.play(
                     chat_id=chat_id,
                     youtube_url=rec["url"],
                     mode=mode,
                     status_msg=status_msg,
-                    requested_by="Smart AutoPlay 🤖"
+                    requested_by="AutoPlay 🎬"
                 ))
                 return True
             else:
