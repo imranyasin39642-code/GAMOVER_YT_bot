@@ -655,8 +655,16 @@ class PlayerManager:
                 print(f"[Player] Ignoring stream_end event during active effect change in chat {chat_id}")
                 return
 
-            # De-duplicate: ignore duplicate stream_end events for the same chat within 2.5 seconds
+            # Premature stream_end protection: ignore false EOF triggers if song hasn't finished
             now = time.time()
+            start_t = self.stream_start_time.get(chat_id, 0)
+            dur_t = self.stream_duration.get(chat_id, 0)
+            elapsed = int(now - start_t) if start_t > 0 else 999
+            if dur_t > 45 and elapsed < (dur_t - 15) and elapsed < 35:
+                print(f"[Player] Premature stream_end in chat {chat_id} (Elapsed: {elapsed}s / Total: {dur_t}s). Ignoring false EOF.")
+                return
+
+            # De-duplicate: ignore duplicate stream_end events for the same chat within 2.5 seconds
             if now - self._last_stream_end.get(chat_id, 0) < 2.5:
                 return
             self._last_stream_end[chat_id] = now
@@ -1311,7 +1319,7 @@ class PlayerManager:
             audio_path=None,
             video_parameters=vid_params,
             audio_parameters=AudioQuality.STUDIO,
-            ffmpeg_parameters="-af loudnorm=I=-16:TP=-1.5:LRA=11,volume=1.25",
+            ffmpeg_parameters="-af aresample=48000",
             video_flags=MediaStream.Flags.REQUIRED if mode == "video" else MediaStream.Flags.IGNORE,
             audio_flags=MediaStream.Flags.REQUIRED,
         )
@@ -1353,7 +1361,7 @@ class PlayerManager:
                             audio_path=None,
                             video_parameters=vid_params,
                             audio_parameters=AudioQuality.STUDIO,
-                            ffmpeg_parameters="-af loudnorm=I=-16:TP=-1.5:LRA=11,volume=1.25",
+                            ffmpeg_parameters="-af aresample=48000",
                             video_flags=MediaStream.Flags.IGNORE,
                             audio_flags=MediaStream.Flags.REQUIRED,
                         )
@@ -1496,24 +1504,12 @@ class PlayerManager:
                 )
             )
 
-            # Silently pre-download ONLY the NEXT 1 upcoming song or Autoplay recommendation
+            # Silently pre-download ONLY the NEXT 1 upcoming song if explicitly queued by user
             queue_snapshot = list(self.queues.get(chat_id, [])[:1])
             if queue_snapshot:
                 for i, next_track in enumerate(queue_snapshot):
                     print(f"[Player] Pre-downloading queued track #{i+1}: {next_track['title']}")
                     asyncio.create_task(self._background_pre_download(chat_id, next_track["url"], mode, next_track["title"]))
-            elif chat_id in self.autoplay_chats:
-                async def _pre_download_autoplay():
-                    try:
-                        from core.scrapers import get_youtube_recommendations
-                        v_id = extract_video_id(youtube_url)
-                        rec = await get_youtube_recommendations(title, v_id)
-                        if rec and rec.get("url"):
-                            print(f"[Player/AutoPlay] Pre-downloading autoplay recommendation: {rec.get('title')} ({mode})")
-                            await self._background_pre_download(chat_id, rec["url"], mode, rec.get("title", ""))
-                    except Exception as e:
-                        print(f"[Player/AutoPlay] Pre-download note: {e}")
-                asyncio.create_task(_pre_download_autoplay())
 
             return True
 
