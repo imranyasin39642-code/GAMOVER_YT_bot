@@ -246,18 +246,21 @@ def auto_clean_downloads(max_folder_mb: int = 10240, keep_files: set = None, max
 
 
 def get_configured_video_parameters():
-    """Reads configured target resolution and FPS from database and returns VideoParameters."""
+    """Reads configured target resolution and FPS from database and returns valid WebRTC VideoParameters."""
     from core.db import get_setting
     q = get_setting("quality_pref") or "720p"
-    fps_str = get_setting("fps_pref") or "60"
+    fps_str = get_setting("fps_pref") or "30"
     try:
         fps_val = int(fps_str)
     except Exception:
-        fps_val = 60
+        fps_val = 30
+
+    # WebRTC group calls accept max 60 FPS (30-60 FPS optimal for smooth video without WebRTC packet drops)
+    fps_val = min(60, max(15, fps_val))
 
     resolution_map = {
-        "4K": (3840, 2160, 2160),
-        "2K": (2560, 1440, 1440),
+        "4K": (1920, 1080, 1080),  # WebRTC caps group call video streams at 1080p for stability
+        "2K": (1920, 1080, 1080),
         "1080p": (1920, 1080, 1080),
         "720p": (1280, 720, 720),
         "480p": (854, 480, 480),
@@ -266,6 +269,7 @@ def get_configured_video_parameters():
     w, h, max_h = resolution_map.get(q, (1280, 720, 720))
     vid_params = VideoParameters(width=w, height=h, frame_rate=fps_val)
     return vid_params, q, fps_val, max_h
+
 
 
 def get_media_duration(file_path: str) -> int:

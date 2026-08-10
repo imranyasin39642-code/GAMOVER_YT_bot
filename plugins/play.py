@@ -58,17 +58,29 @@ def cmd(cmds):
     return filters.create(func, clean_cmds=clean_cmds)
 
 
-async def send_search_status(client: Client, chat_id: int, query: str) -> Message:
-    """Send searching status card."""
+async def send_search_status(client: Client, chat_id: int, query: str, mode: str = "video") -> Message:
+    """Send searching status card with DB cache title lookup."""
+    from core.scrapers import extract_video_id
+    from core.db import get_cached_item
+    display_title = query
+    v_id = extract_video_id(query)
+    if v_id:
+        cached = get_cached_item(v_id, mode) or get_cached_item(v_id, "video") or get_cached_item(v_id, "audio")
+        if cached and cached.get("title"):
+            display_title = cached["title"]
+        else:
+            display_title = f"YouTube Stream ({v_id})"
+
     return await client.send_message(
         chat_id,
         make_card(
-            f"👑 <b>ɢᴀᴍᴇᴏᴠᴇʀ ʏᴛ sᴛʀᴇᴀᴍᴇʀ</b> 👑\n\n"
+            f"👑 <b>ɢᴀṁᴇᴏᴠᴇʀ ʏᴛ sᴛʀᴇᴀṁᴇʀ</b> 👑\n\n"
             f"🔍 <b>S E A R C H I N G   Y O U T U B E...</b>\n"
-            f"📌 <b>Track:</b> <code>{query}</code>\n\n"
+            f"📌 <b>Track:</b> <code>{display_title}</code>\n\n"
             f"⚡ <i>Resolving media stream in 2 seconds...</i>"
         )
     )
+
 
 
 def register(app: Client):
@@ -163,7 +175,7 @@ def register(app: Client):
                 f"• <code>/vd https://youtu.be/B-99Pm--78Y</code>"
             ))
             return
-        status_msg = await send_search_status(client, chat_id, query)
+        status_msg = await send_search_status(client, chat_id, query, mode="video")
         req_name = message.from_user.first_name if message.from_user else "User"
         req_id = message.from_user.id if message.from_user else 0
         asyncio.create_task(player_manager.play(chat_id, query, mode="video", status_msg=status_msg, requested_by=req_name, requested_by_id=req_id))
@@ -184,7 +196,7 @@ def register(app: Client):
                 f"• <code>/ad https://youtu.be/B-99Pm--78Y</code>"
             ))
             return
-        status_msg = await send_search_status(client, chat_id, query)
+        status_msg = await send_search_status(client, chat_id, query, mode="audio")
         req_name = message.from_user.first_name if message.from_user else "User"
         req_id = message.from_user.id if message.from_user else 0
         asyncio.create_task(player_manager.play(chat_id, query, mode="audio", status_msg=status_msg, requested_by=req_name, requested_by_id=req_id))
