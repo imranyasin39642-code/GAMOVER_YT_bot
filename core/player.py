@@ -48,8 +48,8 @@ async def _turbo_multi_download(
             nonlocal downloaded_bytes
             part_headers = {**headers, 'Range': f'bytes={start}-{end}'}
             async with session.get(url, headers=part_headers) as resp:
-                if resp.status not in (206, 200):
-                    raise Exception(f"Part HTTP Status {resp.status}")
+                if resp.status != 206:  # Server MUST support HTTP 206 Partial Content for range splitting!
+                    raise Exception(f"Part HTTP Status {resp.status} (Expected 206)")
 
                 with open(dest_path, "r+b") as f:
                     f.seek(start)
@@ -59,7 +59,7 @@ async def _turbo_multi_download(
                         async with lock:
                             downloaded_bytes += chunk_len
                             now = time.time()
-                            if now - last_update_time[0] >= 1.2 or downloaded_bytes >= total_size:
+                            if now - last_update_time[0] >= 1.0 or downloaded_bytes >= total_size:
                                 last_update_time[0] = now
                                 pct = min(100, max(1, int((downloaded_bytes / total_size) * 100)))
                                 elapsed = now - start_time
@@ -93,7 +93,7 @@ async def download_file(url: str, dest_path: str, progress_callback=None, expect
     max_retries = 3
     timeout = aiohttp.ClientTimeout(total=None, connect=15, sock_read=30)
     headers = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36',
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/125.0.0.0',
         'Accept': '*/*',
         'Accept-Language': 'en-US,en;q=0.9',
         'Referer': 'https://www.youtube.com/',
@@ -102,7 +102,7 @@ async def download_file(url: str, dest_path: str, progress_callback=None, expect
     for attempt in range(1, max_retries + 1):
         try:
             connector = aiohttp.TCPConnector(limit=50, ttl_dns_cache=300)
-            async with aiohttp.ClientSession(timeout=timeout, headers=headers, read_bufsize=2*1024*1024, connector=connector) as session:
+            async with aiohttp.ClientSession(timeout=timeout, headers=headers, read_bufsize=4*1024*1024, connector=connector) as session:
                 target_url = url
                 total_size = 0
 
@@ -162,21 +162,22 @@ async def download_file(url: str, dest_path: str, progress_callback=None, expect
                     downloaded = 0
                     start_time = time.time()
                     last_update = 0
+                    eff_total = total_size or expected_size
 
                     with open(dest_path, "wb") as f:
-                        async for chunk in response.content.iter_chunked(2 * 1024 * 1024):
+                        async for chunk in response.content.iter_chunked(4 * 1024 * 1024):
                             f.write(chunk)
                             downloaded += len(chunk)
 
                             now = time.time()
-                            if now - last_update >= 1.2 or (total_size > 0 and downloaded == total_size):
-                                pct = min(100, max(1, int((downloaded / total_size) * 100))) if total_size > 0 else min(98, max(1, int((downloaded / (12 * 1024 * 1024)) * 100)))
+                            if now - last_update >= 1.0 or (eff_total > 0 and downloaded == eff_total):
+                                pct = min(100, max(1, int((downloaded / eff_total) * 100))) if eff_total > 0 else min(98, max(1, int((downloaded / (12 * 1024 * 1024)) * 100)))
                                 elapsed = now - start_time
                                 speed = (downloaded / elapsed) / (1024 * 1024) if elapsed > 0 else 0
-                                tot_str = f"{total_size // (1024*1024)}MB" if total_size else "calculating..."
+                                tot_str = f"{eff_total // (1024*1024)}MB" if eff_total else "calculating..."
                                 print(f"[Player/Download] {downloaded // (1024*1024)}MB / {tot_str} ({pct}%) | Speed: {speed:.1f} MB/s")
                                 if progress_callback:
-                                    await progress_callback(pct, downloaded, total_size, start_time)
+                                    await progress_callback(pct, downloaded, eff_total, start_time)
                                 last_update = now
 
                     if downloaded < 10000:

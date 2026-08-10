@@ -71,23 +71,24 @@ async def close_browser():
 async def extract_stream_playwright(video_id: str, mode: str = "audio") -> Optional[Dict[str, str]]:
     """
     Tier 2 Media Extractor.
-    Takes video_id, visits web extractors / Invidious mirror instance with Playwright,
+    Takes video_id, visits Invidious REST API & browser engines for high-speed range-supporting stream URLs,
     extracts high-quality stream URL (.m4a for audio, 1080p60/1080p .mp4 for video).
     Auto-rotates on failure.
     """
     clean_video_id = video_id.strip()
     yt_url = f"https://www.youtube.com/watch?v={clean_video_id}"
 
-    # Engine 1: Loader Web Scraper (Fast 1080p & High Quality Audio)
-    try:
-        res = await _scrape_loader_engine(clean_video_id, yt_url, mode)
-        if res and res.get("url"):
-            print(f"[Tier2/Loader] SUCCESS: {res.get('title', 'Video')[:35]} | Mode: {mode}")
-            return res
-    except Exception as e:
-        print(f"[Tier2/Loader] Note: {e}")
+    # Engine 1: Fast Invidious Mirrors REST API (Supports HTTP 206 Range = 25-35 MB/s Multi-Stream Download!)
+    for mirror in INVIDIOUS_MIRRORS:
+        try:
+            res = await _scrape_invidious_api_fast(mirror, clean_video_id, mode)
+            if res and res.get("url"):
+                print(f"[Tier2/Invidious-API] SUCCESS via {mirror}: {res.get('title', 'Video')[:35]}")
+                return res
+        except Exception as e:
+            print(f"[Tier2/Invidious-API] Mirror {mirror} note: {e}")
 
-    # Engine 2: Playwright Headless Scraper on invidious.nerdvpn.de & mirrors
+    # Engine 2: Playwright Headless Scraper on Invidious (Supports HTTP 206 Range)
     try:
         res = await _scrape_invidious_playwright_browser(clean_video_id, mode)
         if res and res.get("url"):
@@ -96,18 +97,18 @@ async def extract_stream_playwright(video_id: str, mode: str = "audio") -> Optio
     except Exception as e:
         print(f"[Tier2/Playwright-Invidious] Note: {e}")
 
-    # Engine 3: Fast Invidious Mirrors REST API
-    for mirror in INVIDIOUS_MIRRORS:
-        try:
-            res = await _scrape_invidious_api_fast(mirror, clean_video_id, mode)
-            if res and res.get("url"):
-                print(f"[Tier2/Invidious] SUCCESS via {mirror}: {res.get('title', 'Video')[:35]}")
-                return res
-        except Exception as e:
-            print(f"[Tier2/Invidious] Mirror {mirror} note: {e}")
+    # Engine 3: Loader Web Scraper (Fallback for 1080p video and MP3 audio)
+    try:
+        res = await _scrape_loader_engine(clean_video_id, yt_url, mode)
+        if res and res.get("url"):
+            print(f"[Tier2/Loader] SUCCESS: {res.get('title', 'Video')[:35]} | Mode: {mode}")
+            return res
+    except Exception as e:
+        print(f"[Tier2/Loader] Note: {e}")
 
     print(f"[Tier2] All extraction engines failed for video_id={clean_video_id}")
     return None
+
 
 
 async def _scrape_loader_engine(video_id: str, youtube_url: str, mode: str) -> Optional[Dict[str, str]]:
