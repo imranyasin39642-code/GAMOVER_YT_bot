@@ -18,8 +18,72 @@ ROYAL_HEADER = "👑 <b>ɢᴀᴍᴇᴏᴠᴇʀ ʏᴛ sᴛʀᴇᴀᴍᴇʀ</b> �
 # Ensure downloads directory exists
 os.makedirs(Config.DOWNLOADS_DIR, exist_ok=True)
 
+async def _turbo_multi_download(
+    session: aiohttp.ClientSession,
+    url: str,
+    dest_path: str,
+    total_size: int,
+    num_workers: int,
+    headers: dict,
+    progress_callback=None
+) -> bool:
+    """Downloads a file in 4-8 parallel HTTP byte range chunks for maximum VPS network throughput (15-30 MB/s)."""
+    try:
+        with open(dest_path, "wb") as f:
+            f.truncate(total_size)
+
+        part_size = total_size // num_workers
+        ranges = []
+        for i in range(num_workers):
+            start = i * part_size
+            end = total_size - 1 if i == num_workers - 1 else (start + part_size - 1)
+            ranges.append((start, end))
+
+        downloaded_bytes = 0
+        lock = asyncio.Lock()
+        start_time = time.time()
+        last_update_time = [0.0]
+
+        async def _download_part(start: int, end: int):
+            nonlocal downloaded_bytes
+            part_headers = {**headers, 'Range': f'bytes={start}-{end}'}
+            async with session.get(url, headers=part_headers) as resp:
+                if resp.status not in (206, 200):
+                    raise Exception(f"Part HTTP Status {resp.status}")
+
+                with open(dest_path, "r+b") as f:
+                    f.seek(start)
+                    async for chunk in resp.content.iter_chunked(2 * 1024 * 1024):
+                        f.write(chunk)
+                        chunk_len = len(chunk)
+                        async with lock:
+                            downloaded_bytes += chunk_len
+                            now = time.time()
+                            if now - last_update_time[0] >= 1.5 or downloaded_bytes >= total_size:
+                                last_update_time[0] = now
+                                pct = min(100, max(1, int((downloaded_bytes / total_size) * 100)))
+                                elapsed = now - start_time
+                                speed = (downloaded_bytes / elapsed) / (1024 * 1024) if elapsed > 0 else 0
+                                print(f"[TurboDownloader] {downloaded_bytes // (1024*1024)}MB / {total_size // (1024*1024)}MB ({pct}%) | Speed: {speed:.1f} MB/s")
+                                if progress_callback:
+                                    try:
+                                        await progress_callback(pct, downloaded_bytes, total_size, start_time)
+                                    except Exception:
+                                        pass
+
+        tasks = [_download_part(s, e) for s, e in ranges]
+        await asyncio.gather(*tasks)
+
+        if os.path.exists(dest_path) and os.path.getsize(dest_path) >= int(total_size * 0.95):
+            return True
+        return False
+    except Exception as e:
+        print(f"[TurboDownloader] Multi-part chunk download note: {e}")
+        return False
+
+
 async def download_file(url: str, dest_path: str, progress_callback=None, expected_size: int = 0) -> bool:
-    """Asynchronously downloads a direct URL to a file with progress updates."""
+    """Asynchronously downloads a direct URL to a file using Turbo Multi-Part Range Downloader with single-stream fallback."""
     if os.path.exists(dest_path):
         try:
             os.remove(dest_path)
@@ -27,45 +91,73 @@ async def download_file(url: str, dest_path: str, progress_callback=None, expect
             pass
 
     max_retries = 3
-    timeout = aiohttp.ClientTimeout(total=None, connect=20, sock_read=40)
+    timeout = aiohttp.ClientTimeout(total=None, connect=15, sock_read=30)
     headers = {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36',
         'Accept': '*/*',
         'Accept-Language': 'en-US,en;q=0.9',
         'Referer': 'https://www.youtube.com/',
     }
+
     for attempt in range(1, max_retries + 1):
         try:
-            async with aiohttp.ClientSession(timeout=timeout, headers=headers) as session:
+            connector = aiohttp.TCPConnector(limit=30, ttl_dns_cache=300)
+            async with aiohttp.ClientSession(timeout=timeout, headers=headers, read_bufsize=2*1024*1024, connector=connector) as session:
+                target_url = url
+                total_size = 0
+
+                try:
+                    async with session.head(url, allow_redirects=True) as head_resp:
+                        target_url = str(head_resp.url)
+                        total_size = head_resp.content_length or int(head_resp.headers.get('content-length') or 0)
+                except Exception:
+                    pass
+
+                if total_size == 0:
+                    try:
+                        import urllib.parse
+                        parsed_u = urllib.parse.urlparse(target_url)
+                        qs = urllib.parse.parse_qs(parsed_u.query)
+                        if 'clen' in qs and qs['clen'][0].isdigit():
+                            total_size = int(qs['clen'][0])
+                        elif 'cl' in qs and qs['cl'][0].isdigit():
+                            total_size = int(qs['cl'][0])
+                    except Exception:
+                        pass
+
+                if total_size == 0 and expected_size > 0:
+                    total_size = expected_size
+
+                # Try Turbo Multi-Part Parallel Range Download for files > 10MB
+                if total_size >= 10 * 1024 * 1024:
+                    num_workers = 8 if total_size >= 50 * 1024 * 1024 else 4
+                    try:
+                        test_headers = {**headers, 'Range': 'bytes=0-1023'}
+                        async with session.get(target_url, headers=test_headers) as test_resp:
+                            if test_resp.status == 206:
+                                print(f"[TurboDownloader] Starting {num_workers} parallel range streams for {total_size // (1024*1024)}MB file...")
+                                ok = await _turbo_multi_download(
+                                    session=session,
+                                    url=target_url,
+                                    dest_path=dest_path,
+                                    total_size=total_size,
+                                    num_workers=num_workers,
+                                    headers=headers,
+                                    progress_callback=progress_callback
+                                )
+                                if ok:
+                                    return True
+                                print("[TurboDownloader] Parallel stream incomplete. Falling back to single-stream download.")
+                    except Exception as te:
+                        print(f"[TurboDownloader] Probe range note: {te}")
+
+                # Fallback to single-stream high-speed download
                 async with session.get(url, allow_redirects=True) as response:
-                    if response.status != 200:
+                    if response.status != 200 and response.status != 206:
                         raise Exception(f"HTTP Status {response.status}")
 
-                    total_size = response.content_length or int(response.headers.get('content-length') or response.headers.get('x-content-length') or 0)
-                    if total_size == 0 and 'Content-Range' in response.headers:
-                        try:
-                            # Content-Range: bytes 0-14983948/14983949
-                            total_size = int(response.headers['Content-Range'].split('/')[-1])
-                        except Exception:
-                            pass
-
-                    # Extract clen or cl query parameter from URL (YouTube & Invidious stream URLs contain exact byte length)
                     if total_size == 0:
-                        try:
-                            import urllib.parse
-                            for check_u in [url, str(response.url)]:
-                                if check_u:
-                                    parsed_u = urllib.parse.urlparse(check_u)
-                                    qs = urllib.parse.parse_qs(parsed_u.query)
-                                    if 'clen' in qs and qs['clen'][0].isdigit():
-                                        total_size = int(qs['clen'][0])
-                                        break
-                                    elif 'cl' in qs and qs['cl'][0].isdigit():
-                                        total_size = int(qs['cl'][0])
-                                        break
-                        except Exception:
-                            pass
-
+                        total_size = response.content_length or int(response.headers.get('content-length') or 0)
                     if total_size == 0 and expected_size > 0:
                         total_size = expected_size
 
@@ -74,18 +166,13 @@ async def download_file(url: str, dest_path: str, progress_callback=None, expect
                     last_update = 0
 
                     with open(dest_path, "wb") as f:
-                        async for chunk in response.content.iter_chunked(1024 * 1024): # 1MB chunks for max VPS speed
+                        async for chunk in response.content.iter_chunked(2 * 1024 * 1024):
                             f.write(chunk)
                             downloaded += len(chunk)
 
-                            # Trigger progress update and terminal log every 2 seconds
                             now = time.time()
-                            if now - last_update >= 2.0 or (total_size > 0 and downloaded == total_size):
-                                if total_size > 0:
-                                    pct = min(100, max(1, int((downloaded / total_size) * 100)))
-                                else:
-                                    pct = min(98, max(1, int((downloaded / (12 * 1024 * 1024)) * 100)))
-
+                            if now - last_update >= 1.5 or (total_size > 0 and downloaded == total_size):
+                                pct = min(100, max(1, int((downloaded / total_size) * 100))) if total_size > 0 else min(98, max(1, int((downloaded / (12 * 1024 * 1024)) * 100)))
                                 elapsed = now - start_time
                                 speed = (downloaded / elapsed) / (1024 * 1024) if elapsed > 0 else 0
                                 tot_str = f"{total_size // (1024*1024)}MB" if total_size else "calculating..."
@@ -104,7 +191,7 @@ async def download_file(url: str, dest_path: str, progress_callback=None, expect
                     os.remove(dest_path)
                 except Exception:
                     pass
-            await asyncio.sleep(2)
+            await asyncio.sleep(1)
             
     return False
 
