@@ -17,10 +17,40 @@ def is_youtube_url(text: str) -> bool:
     """Return True if the text looks like a YouTube URL."""
     return bool(re.search(r'(?:youtube\.com|youtu\.be)', text, re.IGNORECASE))
 
+
+def _is_short_video(video_id: str, html: str) -> bool:
+    """
+    Detect if a video ID belongs to a YouTube Short.
+    Shorts appear in 'shortsLockupViewModel', 'reelWatchEndpoint', or '/shorts/' blocks.
+    Also checks if duration metadata shows < 61 seconds.
+    """
+    # Method 1: Check if video_id appears in a Shorts-specific section of the page
+    shorts_patterns = [
+        r'shortsLockupViewModel[^}]{0,300}' + re.escape(video_id),
+        r'reelWatchEndpoint[^}]{0,200}' + re.escape(video_id),
+        r'/shorts/' + re.escape(video_id),
+    ]
+    for pat in shorts_patterns:
+        if re.search(pat, html):
+            return True
+
+    # Method 2: Check duration from lengthSeconds near this video_id
+    dur_match = re.search(
+        r'"videoId":"' + re.escape(video_id) + r'".*?"lengthSeconds":"(\d+)"',
+        html
+    )
+    if dur_match:
+        dur_sec = int(dur_match.group(1))
+        if dur_sec < 61:  # Anything under 61 seconds is a Short
+            return True
+
+    return False
+
+
 async def search_youtube(query: str) -> Optional[Dict[str, str]]:
     """
     Search YouTube for a query using fast internal search + yt-dlp fallback.
-    Returns a dict with 'video_id', 'url', 'title' of the top result in 1-2 seconds.
+    Returns a dict with 'video_id', 'url', 'title' of the top NON-SHORT result in 1-2 seconds.
     """
     encoded = urllib.parse.quote(query)
     search_url = f"https://www.youtube.com/results?search_query={encoded}"
@@ -34,9 +64,17 @@ async def search_youtube(query: str) -> Optional[Dict[str, str]]:
             async with session.get(search_url, headers=headers, timeout=aiohttp.ClientTimeout(total=4)) as resp:
                 if resp.status == 200:
                     html = await resp.text()
-                    match = re.search(r'"videoId":"([a-zA-Z0-9_-]{11})"', html)
-                    if match:
-                        video_id = match.group(1)
+                    # Collect all video IDs from results page and skip Shorts
+                    matches = re.findall(r'"videoId":"([a-zA-Z0-9_-]{11})"', html)
+                    seen = set()
+                    for video_id in matches:
+                        if video_id in seen:
+                            continue
+                        seen.add(video_id)
+                        # Skip YouTube Shorts
+                        if _is_short_video(video_id, html):
+                            print(f"[Search] Skipping Short: {video_id}")
+                            continue
                         title = "YouTube Video"
                         title_match = re.search(
                             r'"videoId":"' + re.escape(video_id) + r'".*?"title":\{"runs":\[\{"text":"([^"]+)"',
@@ -62,16 +100,17 @@ async def search_youtube(query: str) -> Optional[Dict[str, str]]:
         loop = asyncio.get_event_loop()
         def _flat_search():
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                return ydl.extract_info(f"ytsearch1:{query}", download=False)
+                return ydl.extract_info(f"ytsearch5:{query}", download=False)
         info = await loop.run_in_executor(None, _flat_search)
         if info and 'entries' in info and info['entries']:
-            entry = info['entries'][0]
-            v_id = entry.get('id')
-            v_title = entry.get('title', query)
-            if v_id:
-                v_url = f"https://www.youtube.com/watch?v={v_id}"
-                print(f"[Search] yt-dlp search found: {v_title} → {v_url}")
-                return {"video_id": v_id, "url": v_url, "title": v_title}
+            for entry in info['entries']:
+                v_id = entry.get('id')
+                v_title = entry.get('title', query)
+                duration = entry.get('duration') or 0
+                if v_id and duration >= 61:  # Skip Shorts (< 61 seconds)
+                    v_url = f"https://www.youtube.com/watch?v={v_id}"
+                    print(f"[Search] yt-dlp search found: {v_title} → {v_url}")
+                    return {"video_id": v_id, "url": v_url, "title": v_title}
     except Exception as e:
         print(f"[Search] yt-dlp search fallback error: {e}")
 
@@ -83,13 +122,7 @@ async def get_youtube_recommendations(
     last_video_id: str = "",
     exclude_ids: set = None
 ) -> Optional[Dict[str, str]]:
-    """Fetch next DIFFERENT related song recommendation from YouTube for Auto-Play.
-    
-    Args:
-        last_title: Title of the song that just finished.
-        last_video_id: Video ID of the song that just finished (excluded from recs).
-        exclude_ids: Optional set of video IDs to exclude (prevents recent repeats).
-    """
+    """Fetch next DIFFERENT full-length (non-Short) related song recommendation for Auto-Play."""
     excluded = set(exclude_ids or set())
     if last_video_id:
         excluded.add(last_video_id)
@@ -107,22 +140,25 @@ async def get_youtube_recommendations(
                     if resp.status == 200:
                         html = await resp.text()
                         matches = re.findall(r'"videoId":"([a-zA-Z0-9_-]{11})"', html)
-                        # Collect all unique candidates that are NOT in the excluded set
                         seen = set()
                         candidates = []
                         for v_id in matches:
-                            if v_id not in excluded and v_id not in seen:
-                                seen.add(v_id)
-                                title_match = re.search(
-                                    r'"videoId":"' + re.escape(v_id) + r'".*?"title":\{"runs":\[\{"text":"([^"]+)"',
-                                    html
-                                )
-                                title = title_match.group(1) if title_match else "Related Track"
-                                candidates.append({"video_id": v_id, "url": f"https://www.youtube.com/watch?v={v_id}", "title": title})
-                                if len(candidates) >= 10:
-                                    break
+                            if v_id in excluded or v_id in seen:
+                                continue
+                            seen.add(v_id)
+                            # Skip YouTube Shorts from recommendations
+                            if _is_short_video(v_id, html):
+                                print(f"[AutoPlay] Skipping Short rec: {v_id}")
+                                continue
+                            title_match = re.search(
+                                r'"videoId":"' + re.escape(v_id) + r'".*?"title":\{"runs":\[\{"text":"([^"]+)"',
+                                html
+                            )
+                            title = title_match.group(1) if title_match else "Related Track"
+                            candidates.append({"video_id": v_id, "url": f"https://www.youtube.com/watch?v={v_id}", "title": title})
+                            if len(candidates) >= 10:
+                                break
                         if candidates:
-                            # Pick from the top 5 randomly to avoid always returning the same first result
                             import random
                             pick = random.choice(candidates[:5])
                             print(f"[AutoPlay] Picked recommendation: {pick['title']} ({pick['video_id']})")
@@ -130,14 +166,14 @@ async def get_youtube_recommendations(
         except Exception as e:
             print(f"[AutoPlay] Recommendation parse note: {e}")
 
-    # Fallback: search a varied query using parts of title + mix/lofi/hits keywords
+    # Fallback: search with varied music-focused keywords
     import random
-    suffixes = ["mix", "lofi", "hits 2024", "best songs", "chill", "mashup", "trending"]
-    query = f"{last_title} {random.choice(suffixes)}" if last_title else "top trending music 2024"
+    suffixes = ["full song", "audio", "music video", "hits", "lofi mix", "chill vibes", "mashup"]
+    query = f"{last_title} {random.choice(suffixes)}" if last_title else "top hindi songs 2024"
     result = await search_youtube(query)
-    # If fallback returned the same video, try once more with different suffix
+    # If fallback returned same/excluded video, retry with different keyword
     if result and result.get("video_id") in excluded:
-        query2 = f"{last_title} {random.choice(suffixes)}" if last_title else "new music 2024"
+        query2 = f"{last_title} {random.choice(suffixes)}" if last_title else "new trending music 2024"
         result = await search_youtube(query2)
     return result
 
