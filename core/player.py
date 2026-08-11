@@ -248,19 +248,19 @@ def auto_clean_downloads(max_folder_mb: int = 10240, keep_files: set = None, max
 def get_configured_video_parameters():
     """Reads configured target resolution and FPS from database and returns valid WebRTC VideoParameters."""
     from core.db import get_setting
-    q = get_setting("quality_pref") or "720p"
-    fps_str = get_setting("fps_pref") or "30"
+    q = get_setting("quality_pref") or "180p"
+    fps_str = get_setting("fps_pref") or "90"
     try:
         fps_val = int(fps_str)
     except Exception:
-        fps_val = 30
+        fps_val = 90
 
     # WebRTC group calls accept max 60 FPS (30-60 FPS optimal for smooth video without WebRTC packet drops)
     fps_val = min(60, max(15, fps_val))
 
     resolution_map = {
-        "4K": (1920, 1080, 1080),  # WebRTC caps group call video streams at 1080p for stability
-        "2K": (1920, 1080, 1080),
+        "4K": (3840, 2160, 2160),
+        "2K": (2560, 1440, 1440),
         "1080p": (1920, 1080, 1080),
         "720p": (1280, 720, 720),
         "480p": (854, 480, 480),
@@ -331,55 +331,68 @@ async def download_song_ytdlp(youtube_url: str, dest_path: str, mode: str, progr
     """
     Tier 2 Pure Stream Downloader.
     Resolves direct stream URL via Playwright + Invidious mirror scraper (0% yt-dlp, 0% cookies).
-    Downloads media directly using high-speed aiohttp stream.
+    Downloads media directly using high-speed aiohttp stream with concurrency locks and corrupt file guards.
     """
     import shutil
     auto_clean_downloads(max_folder_mb=10240)
-
-    if os.path.exists(dest_path) and os.path.getsize(dest_path) > 5000:
-        return True
 
     v_id = extract_video_id(youtube_url)
     if not v_id:
         return False
 
-    cached = get_from_cache(v_id, mode)
-    if cached and os.path.exists(cached["file_path"]) and os.path.getsize(cached["file_path"]) > 5000:
-        if cached["file_path"] != dest_path:
-            try:
-                shutil.copy(cached["file_path"], dest_path)
-            except Exception:
-                pass
-        if title_callback and cached.get("title"):
-            title_callback(cached["title"])
-        print(f"[Player] Direct cache hit for ID {v_id}! Playing instantly.")
-        return True
+    lock_key = f"{v_id}_{mode}"
+    if lock_key not in FILE_DOWNLOAD_LOCKS:
+        FILE_DOWNLOAD_LOCKS[lock_key] = asyncio.Lock()
 
-    print(f"[Player/Tier2] Initiating Stream Resolution for {youtube_url} ({mode})...")
-    res = await resolve_stream_url(youtube_url, mode)
+    async with FILE_DOWNLOAD_LOCKS[lock_key]:
+        # Corrupt file guard: if file exists but is under 50KB, purge corrupt file
+        if os.path.exists(dest_path):
+            if os.path.getsize(dest_path) > 50000:
+                return True
+            else:
+                try:
+                    os.remove(dest_path)
+                    print(f"[Player] Removed incomplete/corrupt download file: {dest_path}")
+                except Exception:
+                    pass
 
-    if res and res.get("url"):
-        stream_url = res["url"]
-        title = res.get("title", "YouTube Video")
-        if title_callback and title != "YouTube Video":
-            title_callback(title)
-        expected_sz = int(res.get("filesize") or (res.get("duration", 0) * (750000 if mode == "video" else 30000)))
-        print(f"[Player/Tier2] Resolved Stream URL: {title[:35]} | Expected Size: {expected_sz // (1024*1024)}MB | Downloading...")
-        ok = await download_file(stream_url, dest_path, progress_callback, expected_size=expected_sz)
-        if ok and os.path.exists(dest_path) and os.path.getsize(dest_path) > 5000:
-            ensure_audio_track(dest_path)
-            save_to_cache(
-                video_id=v_id,
-                mode=mode,
-                file_path=dest_path,
-                title=title,
-                duration=res.get("duration", 0),
-                thumbnail=res.get("thumbnail") or f"https://i.ytimg.com/vi/{v_id}/hqdefault.jpg"
-            )
-            print(f"[Player/Tier2] Download SUCCESS! File size: {os.path.getsize(dest_path) // 1024} KB")
+        cached = get_from_cache(v_id, mode)
+        if cached and os.path.exists(cached["file_path"]) and os.path.getsize(cached["file_path"]) > 50000:
+            if cached["file_path"] != dest_path:
+                try:
+                    shutil.copy(cached["file_path"], dest_path)
+                except Exception:
+                    pass
+            if title_callback and cached.get("title"):
+                title_callback(cached["title"])
+            print(f"[Player] Direct cache hit for ID {v_id}! Playing instantly.")
             return True
 
-    return False
+        print(f"[Player/Tier2] Initiating Stream Resolution for {youtube_url} ({mode})...")
+        res = await resolve_stream_url(youtube_url, mode)
+
+        if res and res.get("url"):
+            stream_url = res["url"]
+            title = res.get("title", "YouTube Video")
+            if title_callback and title != "YouTube Video":
+                title_callback(title)
+            expected_sz = int(res.get("filesize") or (res.get("duration", 0) * (750000 if mode == "video" else 30000)))
+            print(f"[Player/Tier2] Resolved Stream URL: {title[:35]} | Expected Size: {expected_sz // (1024*1024)}MB | Downloading...")
+            ok = await download_file(stream_url, dest_path, progress_callback, expected_size=expected_sz)
+            if ok and os.path.exists(dest_path) and os.path.getsize(dest_path) > 50000:
+                ensure_audio_track(dest_path)
+                save_to_cache(
+                    video_id=v_id,
+                    mode=mode,
+                    file_path=dest_path,
+                    title=title,
+                    duration=res.get("duration", 0),
+                    thumbnail=res.get("thumbnail") or f"https://i.ytimg.com/vi/{v_id}/hqdefault.jpg"
+                )
+                print(f"[Player/Tier2] Download SUCCESS! File size: {os.path.getsize(dest_path) // 1024} KB")
+                return True
+
+        return False
 
 
 class SeekableMediaStream(MediaStream):
