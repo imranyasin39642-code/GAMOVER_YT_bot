@@ -822,6 +822,39 @@ class PlayerManager:
         finally:
             self.download_tasks.pop(task_key, None)
 
+    async def trigger_autoplay_prefetch(self, chat_id: int):
+        """Triggers silent background pre-fetch and pre-download of next autoplay recommendation for an active stream."""
+        if chat_id not in self.autoplay_chats or chat_id not in self.active_calls:
+            return
+
+        if self.queues.get(chat_id):
+            return
+
+        if chat_id in self.autoplay_next_rec:
+            print(f"[Player/AutoPlay] Pre-fetch recommendation already present for chat {chat_id}.")
+            return
+
+        title = self.stream_title.get(chat_id, "") or self.last_played_title.get(chat_id, "")
+        video_id = self.last_played_videoid.get(chat_id, "")
+        mode = self.last_played_mode.get(chat_id, "video")
+
+        if not title or not video_id:
+            return
+
+        print(f"[Player/AutoPlay] Triggering instant background pre-download for active stream: '{title}' ({video_id})")
+        try:
+            from core.scrapers import get_youtube_recommendations
+            recent = self.autoplay_recent_ids.get(chat_id, [])
+            exclude = set(recent)
+            rec = await get_youtube_recommendations(title, video_id, exclude_ids=exclude)
+            if rec and rec.get("url") and rec.get("video_id") not in exclude:
+                self.autoplay_next_rec[chat_id] = rec
+                rec_t = rec.get("title", "AutoPlay Recommendation")
+                print(f"[Player/AutoPlay] Pre-fetching & downloading next autoplay track: {rec_t} ({rec.get('video_id')})")
+                await self._background_pre_download(chat_id, rec["url"], mode, rec_t)
+        except Exception as pre_err:
+            print(f"[Player/AutoPlay] Background pre-download note: {pre_err}")
+
     async def execute_playlist(
         self,
         chat_id: int,
@@ -1549,18 +1582,7 @@ class PlayerManager:
                 # Autoplay is ON — pre-fetch recommendation AND pre-download completely to disk in background!
                 async def _prefetch_and_download_autoplay():
                     await asyncio.sleep(2.5)  # 2.5s delay so current playback is fully started
-                    try:
-                        from core.scrapers import get_youtube_recommendations
-                        recent = self.autoplay_recent_ids.get(chat_id, [])
-                        exclude = set(recent)
-                        rec = await get_youtube_recommendations(title, video_id, exclude_ids=exclude)
-                        if rec and rec.get("url") and rec.get("video_id") not in exclude:
-                            self.autoplay_next_rec[chat_id] = rec
-                            rec_t = rec.get("title", "AutoPlay Recommendation")
-                            print(f"[Player/AutoPlay] Pre-fetching & downloading next autoplay track: {rec_t} ({rec.get('video_id')})")
-                            await self._background_pre_download(chat_id, rec["url"], mode, rec_t)
-                    except Exception as pre_err:
-                        print(f"[Player/AutoPlay] Background pre-download note: {pre_err}")
+                    await self.trigger_autoplay_prefetch(chat_id)
 
                 asyncio.create_task(_prefetch_and_download_autoplay())
 

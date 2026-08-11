@@ -717,6 +717,7 @@ def register(app: Client):
 
         if chat_id in player_manager.autoplay_chats:
             player_manager.autoplay_chats.remove(chat_id)
+            player_manager.autoplay_next_rec.pop(chat_id, None)
             await message.reply_text(make_card(
                 f"{ROYAL_HEADER}🛑 <b>Auto-Play Mode Disabled!</b>\n\n"
                 f"• <b>Status:</b> <code>OFF</code>\n"
@@ -724,12 +725,14 @@ def register(app: Client):
             ))
         else:
             player_manager.autoplay_chats.add(chat_id)
+            asyncio.create_task(player_manager.trigger_autoplay_prefetch(chat_id))
             cur_mode = player_manager.last_played_mode.get(chat_id, "video").title()
             await message.reply_text(make_card(
                 f"{ROYAL_HEADER}🔀 <b>Smart Auto-Play Mode Enabled!</b>\n\n"
                 f"• <b>Status:</b> <code>ON</code>\n"
                 f"• <b>Mode:</b> <code>{cur_mode}</code>\n"
-                f"• <b>Toggled By:</b> {user_link}"
+                f"• <b>Toggled By:</b> {user_link}\n\n"
+                f"⚡ <i>Pre-fetching & downloading next recommendation in background...</i>"
             ))
 
     @app.on_message(cmd(["queue", "cqueue", "recent"]))
@@ -801,10 +804,12 @@ def register(app: Client):
                 return
             if chat_id in player_manager.autoplay_chats:
                 player_manager.autoplay_chats.remove(chat_id)
+                player_manager.autoplay_next_rec.pop(chat_id, None)
                 await query.answer("🛑 Auto-Play Disabled!", show_alert=True)
             else:
                 player_manager.autoplay_chats.add(chat_id)
-                await query.answer("🔀 Auto-Play Enabled! YouTube recommendations will auto-play.", show_alert=True)
+                asyncio.create_task(player_manager.trigger_autoplay_prefetch(chat_id))
+                await query.answer("🔀 Auto-Play Enabled! Pre-fetching recommendation in background...", show_alert=True)
         current_title = player_manager.stream_title.get(chat_id, "Unknown Title")
         queued_songs = player_manager.queues.get(chat_id, [])
         ap_status = "ENABLED 🟢" if chat_id in player_manager.autoplay_chats else "DISABLED 🔴"
