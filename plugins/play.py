@@ -77,7 +77,6 @@ async def send_search_status(client: Client, chat_id: int, query: str, mode: str
             f"👑 <b>ɢᴀṁᴇᴏᴠᴇʀ ʏᴛ sᴛʀᴇᴀṁᴇʀ</b> 👑\n\n"
             f"🔍 <b>S E A R C H I N G   Y O U T U B E...</b>\n"
             f"📌 <b>Track:</b> <code>{display_title}</code>\n\n"
-            f"⚡ <i>Resolving media stream in 2 seconds...</i>"
         )
     )
 
@@ -90,7 +89,6 @@ def register(app: Client):
         if message.chat and message.chat.id:
             title = message.chat.title or "Group Chat"
             update_group_info(message.chat.id, title)
-            print(f"[GroupMsg] {message.chat.id}: '{message.text or message.caption}'")
         message.continue_propagation()
 
     @app.on_message(cmd(["start"]))
