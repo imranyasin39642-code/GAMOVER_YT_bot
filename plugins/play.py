@@ -59,11 +59,13 @@ def cmd(cmds):
 
 
 async def send_search_status(client: Client, chat_id: int, query: str, mode: str = "video") -> Message:
-    """Send searching status card with DB cache title lookup."""
-    from core.scrapers import extract_video_id
+    """Send searching status card with DB cache title lookup and URL check."""
+    from core.scrapers import extract_video_id, is_youtube_url
     from core.db import get_cached_item
     display_title = query
     v_id = extract_video_id(query)
+    is_link = is_youtube_url(query) or bool(v_id)
+
     if v_id:
         cached = get_cached_item(v_id, mode) or get_cached_item(v_id, "video") or get_cached_item(v_id, "audio")
         if cached and cached.get("title"):
@@ -71,14 +73,18 @@ async def send_search_status(client: Client, chat_id: int, query: str, mode: str
         else:
             display_title = f"YouTube Stream ({v_id})"
 
+    header = "⚡ <b>R E S O L V I N G   L I N K...</b>" if is_link else "🔍 <b>S E A R C H I N G   Y O U T U B E...</b>"
+
     return await client.send_message(
         chat_id,
         make_card(
             f"👑 <b>ɢᴀṁᴇᴏᴠᴇʀ ʏᴛ sᴛʀᴇᴀṁᴇʀ</b> 👑\n\n"
-            f"🔍 <b>S E A R C H I N G   Y O U T U B E...</b>\n"
+            f"{header}\n"
             f"📌 <b>Track:</b> <code>{display_title}</code>\n\n"
+            f"⚡ <i>Fetching high-speed media stream...</i>"
         )
     )
+
 
 
 
