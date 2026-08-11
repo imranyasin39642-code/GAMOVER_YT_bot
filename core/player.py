@@ -1666,44 +1666,56 @@ class PlayerManager:
             return True
 
         elif chat_id in self.autoplay_chats:
-            last_t = self.stream_title.get(chat_id) or self.last_played_title.get(chat_id, "")
-            last_v = self.last_played_videoid.get(chat_id, "")
             mode = self.last_played_mode.get(chat_id, "video")
-            print(f"[Player/AutoPlay] Skip on empty queue. Finding recommendation ({mode}) for: {last_t}")
 
-            # Clear stale refs — play() will re-add to active_calls when new stream starts
-            self.active_calls.discard(chat_id)
-            self.active_files.pop(chat_id, None)
-            self.active_requester_id.pop(chat_id, None)
+            # 1. Check if we already pre-downloaded the next autoplay recommendation on disk!
+            rec = self.autoplay_next_rec.pop(chat_id, None)
 
-            status_msg = await self.app.send_message(
-                chat_id,
-                f"{ROYAL_HEADER}🔀 <b>Smart Auto-Play:</b> Finding next {mode.title()} recommendation..."
-            )
+            recent = self.autoplay_recent_ids.get(chat_id, [])
+            exclude = set(recent)
 
-            from core.scrapers import get_youtube_recommendations
-            rec = None
-            for attempt in range(1, 4):
-                try:
-                    rec = await get_youtube_recommendations(last_t, last_v)
-                    if rec and rec.get("url"):
-                        break
-                except Exception as e:
-                    print(f"[Player/AutoPlay] Skip rec attempt {attempt} failed: {e}")
-                await asyncio.sleep(2)
+            if rec and rec.get("video_id") in exclude:
+                rec = None  # Discard if repeat
+
+            if not rec:
+                # Fall back to fresh recommendation if pre-download wasn't ready
+                last_t = self.stream_title.get(chat_id) or self.last_played_title.get(chat_id, "")
+                last_v = self.last_played_videoid.get(chat_id, "")
+                print(f"[Player/AutoPlay] Skip on empty queue. Finding fresh recommendation ({mode}) for: {last_t}")
+
+                from core.scrapers import get_youtube_recommendations
+                for attempt in range(1, 4):
+                    try:
+                        rec = await get_youtube_recommendations(last_t, last_v, exclude_ids=exclude)
+                        if rec and rec.get("url"):
+                            break
+                    except Exception as e:
+                        print(f"[Player/AutoPlay] Skip rec attempt {attempt} failed: {e}")
+                    await asyncio.sleep(1.5)
 
             if rec and rec.get("url"):
                 rec_vid = rec.get("video_id", "")
                 recent_list = self.autoplay_recent_ids.get(chat_id, [])
                 recent_list.append(rec_vid)
                 self.autoplay_recent_ids[chat_id] = recent_list[-15:]
-                print(f"[Player/AutoPlay] Skip → Auto-playing recommendation: {rec.get('title')} ({mode})")
+
+                print(f"[Player/AutoPlay] Skip → Auto-playing pre-downloaded recommendation: {rec.get('title')} ({rec_vid})")
+
+                # Clear stale refs — play() will re-add to active_calls when stream starts
+                self.active_calls.discard(chat_id)
+                self.active_files.pop(chat_id, None)
+                self.active_requester_id.pop(chat_id, None)
+
+                status_msg = await self.app.send_message(
+                    chat_id,
+                    f"{ROYAL_HEADER}⏭ <b>Skipping...</b> Auto-playing: <code>{rec.get('title')}</code>"
+                )
                 asyncio.create_task(self.play(
                     chat_id=chat_id,
                     youtube_url=rec["url"],
                     mode=mode,
                     status_msg=status_msg,
-                    requested_by="AutoPlay 🎬"
+                    requested_by="GAMEOVER AutoPlay 🎬"
                 ))
                 return True
             else:
