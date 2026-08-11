@@ -1633,6 +1633,24 @@ class PlayerManager:
                 for i, next_track in enumerate(queue_snapshot):
                     print(f"[Player] Pre-downloading queued track #{i+1}: {next_track['title']}")
                     asyncio.create_task(self._background_pre_download(chat_id, next_track["url"], mode, next_track["title"]))
+            elif chat_id in self.autoplay_chats:
+                # Autoplay is ON — pre-fetch recommendation AND pre-download completely to disk in background!
+                async def _prefetch_and_download_autoplay():
+                    await asyncio.sleep(2.5)  # 2.5s delay so current playback is fully started
+                    try:
+                        from core.scrapers import get_youtube_recommendations
+                        recent = self.autoplay_recent_ids.get(chat_id, [])
+                        exclude = set(recent)
+                        rec = await get_youtube_recommendations(title, video_id, exclude_ids=exclude)
+                        if rec and rec.get("url") and rec.get("video_id") not in exclude:
+                            self.autoplay_next_rec[chat_id] = rec
+                            rec_t = rec.get("title", "AutoPlay Recommendation")
+                            print(f"[Player/AutoPlay] Pre-fetching & downloading next autoplay track: {rec_t} ({rec.get('video_id')})")
+                            await self._background_pre_download(chat_id, rec["url"], mode, rec_t)
+                    except Exception as pre_err:
+                        print(f"[Player/AutoPlay] Background pre-download note: {pre_err}")
+
+                asyncio.create_task(_prefetch_and_download_autoplay())
 
             return True
 

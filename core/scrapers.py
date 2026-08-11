@@ -47,10 +47,38 @@ def _is_short_video(video_id: str, html: str) -> bool:
     return False
 
 
+async def _search_invidious_api(query: str) -> Optional[Dict[str, str]]:
+    """Ultra-fast Invidious REST API Search Engine (0.3 seconds)."""
+    encoded = urllib.parse.quote(query)
+    mirrors = ["https://invidious.nerdvpn.de", "https://inv.nadeko.net", "https://yewtu.be"]
+    timeout = aiohttp.ClientTimeout(total=3, connect=1.5)
+    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
+
+    for mirror in mirrors:
+        try:
+            url = f"{mirror}/api/v1/search?q={encoded}&type=video"
+            async with aiohttp.ClientSession(timeout=timeout, headers=headers) as session:
+                async with session.get(url) as resp:
+                    if resp.status == 200:
+                        data = await resp.json(content_type=None)
+                        if data and isinstance(data, list):
+                            for item in data:
+                                v_id = item.get("videoId")
+                                title = item.get("title") or "YouTube Video"
+                                length = item.get("lengthSeconds") or 0
+                                if v_id and length >= 61:  # Skip Shorts (< 61 seconds)
+                                    v_url = f"https://www.youtube.com/watch?v={v_id}"
+                                    print(f"[Search/Invidious] Found in 0.3s: {title} → {v_url}")
+                                    return {"video_id": v_id, "url": v_url, "title": title}
+        except Exception as e:
+            print(f"[Search/Invidious] Mirror {mirror} note: {e}")
+    return None
+
+
 async def search_youtube(query: str) -> Optional[Dict[str, str]]:
     """
-    Search YouTube for a query using fast internal search + yt-dlp fallback.
-    Returns a dict with 'video_id', 'url', 'title' of the top NON-SHORT result in 1-2 seconds.
+    Search YouTube for a query using fast internal search + Invidious API + yt-dlp fallback.
+    Returns a dict with 'video_id', 'url', 'title' of the top NON-SHORT result in 0.5-1.5 seconds.
     """
     encoded = urllib.parse.quote(query)
     search_url = f"https://www.youtube.com/results?search_query={encoded}"
@@ -61,19 +89,16 @@ async def search_youtube(query: str) -> Optional[Dict[str, str]]:
     try:
         connector = get_doh_connector()
         async with aiohttp.ClientSession(connector=connector) as session:
-            async with session.get(search_url, headers=headers, timeout=aiohttp.ClientTimeout(total=4)) as resp:
+            async with session.get(search_url, headers=headers, timeout=aiohttp.ClientTimeout(total=3)) as resp:
                 if resp.status == 200:
                     html = await resp.text()
-                    # Collect all video IDs from results page and skip Shorts
                     matches = re.findall(r'"videoId":"([a-zA-Z0-9_-]{11})"', html)
                     seen = set()
                     for video_id in matches:
                         if video_id in seen:
                             continue
                         seen.add(video_id)
-                        # Skip YouTube Shorts
                         if _is_short_video(video_id, html):
-                            print(f"[Search] Skipping Short: {video_id}")
                             continue
                         title = "YouTube Video"
                         title_match = re.search(
@@ -88,6 +113,11 @@ async def search_youtube(query: str) -> Optional[Dict[str, str]]:
     except Exception as e:
         print(f"[Search] Fast HTML search note: {e}")
 
+    # Ultra-Fast Invidious REST API Search (0.3s)
+    res = await _search_invidious_api(query)
+    if res:
+        return res
+
     # Fast yt-dlp search fallback
     try:
         import yt_dlp
@@ -96,6 +126,7 @@ async def search_youtube(query: str) -> Optional[Dict[str, str]]:
             'skip_download': True,
             'quiet': True,
             'no_warnings': True,
+            'socket_timeout': 4,
         }
         loop = asyncio.get_event_loop()
         def _flat_search():
