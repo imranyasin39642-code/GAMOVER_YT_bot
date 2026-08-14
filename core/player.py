@@ -93,7 +93,8 @@ async def download_file(url: str, dest_path: str, progress_callback=None, expect
                                 last_update = now
 
                     if downloaded < 10000:
-                        raise Exception("Downloaded file is too small.")
+                        print(f"[Downloader] Error: Downloaded only {downloaded} bytes from {target_url[:60]} (Content-Type: {response.headers.get('Content-Type')})")
+                        raise Exception(f"Downloaded file is too small ({downloaded} bytes).")
                     return True
         except Exception as e:
             print(f"[Downloader] Attempt {attempt} failed: {e}")
