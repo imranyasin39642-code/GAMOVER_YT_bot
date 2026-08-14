@@ -20,10 +20,10 @@ from typing import Optional, Dict
 import aiohttp
 
 INVIDIOUS_MIRRORS = [
-    "https://invidious.nerdvpn.de",
     "https://yewtu.be",
-    "https://inv.nadeko.net",
-    "https://invidious.io.lol",
+    "https://invidious.projectsegfau.lt",
+    "https://inv.tux.pizza",
+    "https://invidious.nerdvpn.de",
 ]
 
 

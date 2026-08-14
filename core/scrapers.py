@@ -115,24 +115,14 @@ async def _search_invidious_api(query: str) -> Optional[Dict[str, str]]:
 
 async def search_youtube(query: str) -> Optional[Dict[str, str]]:
     """
-    Search invidious.nerdvpn.de for a query.
+    Search YouTube HTML directly for top result (sub-second resolution).
     Returns a dict with 'video_id', 'url', 'title' of the top relative result.
     """
-    # 1. Primary: Search invidious.nerdvpn.de HTML directly for top result
-    inv_html = await _search_invidious_html(query)
-    if inv_html:
-        return inv_html
-
-    # 2. Ultra-Fast Invidious REST API Search
-    res = await _search_invidious_api(query)
-    if res:
-        return res
-
-    # 3. Direct HTML Search fallback on YouTube
+    # 1. Primary: Direct HTML Search on YouTube (0-cookie, instant)
     encoded = urllib.parse.quote(query)
     search_url = f"https://www.youtube.com/results?search_query={encoded}"
     headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/127.0.0.0 Safari/537.36",
         "Accept-Language": "en-US,en;q=0.9",
     }
     try:
@@ -163,6 +153,16 @@ async def search_youtube(query: str) -> Optional[Dict[str, str]]:
 
     except Exception as e:
         print(f"[Search] Fast HTML search note: {e}")
+
+    # 2. Invidious HTML Fallback
+    inv_html = await _search_invidious_html(query)
+    if inv_html:
+        return inv_html
+
+    # 3. Ultra-Fast Invidious REST API Search Fallback
+    res = await _search_invidious_api(query)
+    if res:
+        return res
 
     # 4. Piped REST API Search Fallback (0-cookie)
     try:
@@ -398,29 +398,32 @@ async def _extract_gameover_api(video_url: str, mode: str) -> Optional[Dict[str,
 async def _extract_cobalt(video_url: str, mode: str) -> Optional[Dict[str, str]]:
     """Resolves direct stream URL using public Cobalt API instances."""
     instances = [
-        "https://api.qwkuns.me",
-        "https://cobaltapi.kittycat.boo",
-        "https://nuko-c.meowing.de",
-        "https://subito-c.meowing.de",
         "https://rue-cobalt.xenon.zone",
+        "https://cobalt.q19.org",
+        "https://api.cobalt.tools",
+        "https://cobalt.api.sc7.io",
+        "https://subito-c.meowing.de",
+        "https://nuko-c.meowing.de",
         "https://api.cobalt.liubquanti.click",
     ]
     payload = {
         "url": video_url,
-        "videoQuality": "480",
-        "downloadMode": "audio" if mode == "audio" else "video"
+        "downloadMode": "audio" if mode == "audio" else "auto"
     }
+    if mode == "video":
+        payload["videoQuality"] = "720"
+
     headers = {
         "Accept": "application/json",
         "Content-Type": "application/json",
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36"
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/127.0.0.0 Safari/537.36"
     }
     connector = get_doh_connector()
     try:
         async with aiohttp.ClientSession(headers=headers, connector=connector) as session:
             async def check_instance(instance: str) -> Optional[Dict[str, str]]:
                 try:
-                    async with session.post(instance, json=payload, timeout=aiohttp.ClientTimeout(total=8)) as resp:
+                    async with session.post(instance, json=payload, timeout=aiohttp.ClientTimeout(total=5)) as resp:
                         if resp.status == 200:
                             data = await resp.json()
                             if data.get("status") != "error" and data.get("url"):
@@ -453,18 +456,16 @@ async def _extract_cobalt(video_url: str, mode: str) -> Optional[Dict[str, str]]
 
 # ─── Scraper 3: Invidious API (Open-Source Multi-Instance YouTube Frontend) ─
 async def _extract_invidious(video_url: str, mode: str) -> Optional[Dict[str, str]]:
-    """Resolves stream direct URL via Invidious API instances."""
+    """Resolves stream direct URL via Invidious API instances in parallel."""
     video_id = extract_video_id(video_url)
     if not video_id:
         return None
 
     instances = [
-        "https://invidious.nerdvpn.de",
         "https://yewtu.be",
-        "https://inv.nadeko.net",
-        "https://invidious.drgns.space",
+        "https://invidious.projectsegfau.lt",
         "https://inv.tux.pizza",
-        "https://invidious.lunar.icu",
+        "https://invidious.nerdvpn.de",
     ]
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
@@ -473,29 +474,43 @@ async def _extract_invidious(video_url: str, mode: str) -> Optional[Dict[str, st
     connector = get_doh_connector()
     try:
         async with aiohttp.ClientSession(headers=headers, connector=connector) as session:
-            for inst in instances:
+            async def check_inv_instance(inst: str) -> Optional[Dict[str, str]]:
                 try:
                     api_url = f"{inst}/api/v1/videos/{video_id}"
-                    async with session.get(api_url, timeout=aiohttp.ClientTimeout(total=8)) as resp:
+                    async with session.get(api_url, timeout=aiohttp.ClientTimeout(total=5)) as resp:
                         if resp.status == 200:
-                            data = await resp.json()
-                            title = data.get("title", "YouTube Video")
-                            dur = int(data.get("lengthSeconds", 0))
-                            thumb = f"https://img.youtube.com/vi/{video_id}/hqdefault.jpg"
+                            data = await resp.json(content_type=None)
+                            if isinstance(data, dict):
+                                title = data.get("title", "YouTube Video")
+                                dur = int(data.get("lengthSeconds", 0))
+                                thumb = f"https://img.youtube.com/vi/{video_id}/hqdefault.jpg"
 
-                            if mode == "audio":
-                                adaptive = data.get("adaptiveFormats", [])
-                                audio_streams = [f for f in adaptive if str(f.get("type", "")).startswith("audio/")]
-                                if audio_streams:
-                                    audio_streams.sort(key=lambda x: int(x.get("bitrate", 0)), reverse=True)
-                                    return {"url": audio_streams[0]["url"], "title": title, "duration": dur, "thumbnail": thumb}
-                            else:
-                                format_streams = data.get("formatStreams", [])
-                                if format_streams:
-                                    format_streams.sort(key=lambda x: int(x.get("height", 0) or 0), reverse=True)
-                                    return {"url": format_streams[0]["url"], "title": title, "duration": dur, "thumbnail": thumb}
+                                if mode == "audio":
+                                    adaptive = data.get("adaptiveFormats", [])
+                                    audio_streams = [f for f in adaptive if str(f.get("type", "")).startswith("audio/")]
+                                    if audio_streams:
+                                        audio_streams.sort(key=lambda x: int(x.get("bitrate", 0) or 0), reverse=True)
+                                        return {"url": audio_streams[0]["url"], "title": title, "duration": dur, "thumbnail": thumb}
+                                else:
+                                    format_streams = data.get("formatStreams", [])
+                                    if format_streams:
+                                        format_streams.sort(key=lambda x: int(x.get("height", 0) or 0), reverse=True)
+                                        return {"url": format_streams[0]["url"], "title": title, "duration": dur, "thumbnail": thumb}
                 except Exception:
-                    continue
+                    pass
+                return None
+
+            tasks = [asyncio.create_task(check_inv_instance(inst)) for inst in instances]
+            for future in asyncio.as_completed(tasks):
+                try:
+                    res = await future
+                    if res:
+                        for t in tasks:
+                            if not t.done():
+                                t.cancel()
+                        return res
+                except Exception:
+                    pass
     except Exception as e:
         print(f"[Scraper/invidious] Invidious extraction note: {e}")
     return None
