@@ -70,46 +70,45 @@ async def close_browser():
 
 async def extract_stream_playwright(video_id: str, mode: str = "audio") -> Optional[Dict[str, str]]:
     """
-    Tier 2 Parallel Multitasking Media Extractor.
-    Executes REST API mirrors & Playwright browser contexts IN PARALLEL for sub-second responses.
-    Allows multiple concurrent users in same/different groups without delay.
+    Tier 2 Multi-Engine Parallel Extractor.
+    Races Cobalt, Loader Engine, Piped, Invidious REST API, and YT5s IN PARALLEL for sub-second responses.
+    Allows multiple concurrent users in same/different groups without initial failure delay.
     """
     clean_video_id = video_id.strip()
     yt_url = f"https://www.youtube.com/watch?v={clean_video_id}"
 
-    # Engine 1: Instant Parallel Invidious REST API Mirrors (0.2s - 0.5s resolution)
-    api_tasks = [
-        asyncio.create_task(_scrape_invidious_api_fast(mirror, clean_video_id, mode))
-        for mirror in INVIDIOUS_MIRRORS
+    # Import fast scrapers from core.scrapers for parallel execution
+    from core.scrapers import _extract_cobalt, _extract_piped, _extract_yt5s, _extract_invidious
+
+    # Unified Parallel Engine Pool (High performance fast working scrapers FIRST)
+    parallel_tasks = [
+        asyncio.create_task(_extract_cobalt(yt_url, mode)),
+        asyncio.create_task(_scrape_loader_engine(clean_video_id, yt_url, mode)),
+        asyncio.create_task(_extract_piped(yt_url, mode)),
+        asyncio.create_task(_extract_invidious(yt_url, mode)),
+        asyncio.create_task(_extract_yt5s(yt_url, mode)),
     ]
-    for future in asyncio.as_completed(api_tasks):
+
+    for mirror in INVIDIOUS_MIRRORS:
+        parallel_tasks.append(asyncio.create_task(_scrape_invidious_api_fast(mirror, clean_video_id, mode)))
+
+    for future in asyncio.as_completed(parallel_tasks):
         try:
             res = await future
             if res and res.get("url"):
-                for t in api_tasks:
+                for t in parallel_tasks:
                     if not t.done():
                         t.cancel()
-                print(f"[Tier2/Invidious-API] INSTANT PARALLEL SUCCESS: {res.get('title', 'Video')[:35]}")
+                print(f"[Tier2/Parallel-Engine] INSTANT SUCCESS: {res.get('title', 'Video')[:40]}")
                 return res
         except Exception:
             pass
 
-    # Engine 2: Fallback Parallel Multitasking (Playwright Browser Context + Loader Scraper simultaneously)
-    fallback_tasks = [
-        asyncio.create_task(_scrape_invidious_playwright_browser(clean_video_id, mode)),
-        asyncio.create_task(_scrape_loader_engine(clean_video_id, yt_url, mode))
-    ]
-    for future in asyncio.as_completed(fallback_tasks):
-        try:
-            res = await future
-            if res and res.get("url"):
-                for t in fallback_tasks:
-                    if not t.done():
-                        t.cancel()
-                print(f"[Tier2/Multitask-Parallel] SUCCESS: {res.get('title', 'Video')[:35]}")
-                return res
-        except Exception:
-            pass
+    # Playwright browser fallback if all API endpoints fail or timeout
+    print(f"[Tier2] Fast API engines unresponsive for video_id={clean_video_id}. Attempting Playwright Chromium...")
+    browser_res = await _scrape_invidious_playwright_browser(clean_video_id, mode)
+    if browser_res and browser_res.get("url"):
+        return browser_res
 
     print(f"[Tier2] All extraction engines failed for video_id={clean_video_id}")
     return None

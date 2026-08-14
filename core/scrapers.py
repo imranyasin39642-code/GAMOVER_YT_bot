@@ -783,7 +783,7 @@ async def _extract_9xbuddy(video_url: str, mode: str) -> Optional[Dict[str, str]
 
 
 async def extract_youtube_playlist(playlist_url: str) -> Optional[list]:
-    """Extract flat entries from a YouTube playlist quickly with SQLite DB caching."""
+    """Extract flat entries from a YouTube playlist quickly (up to 50 tracks) with caching & multi-fallback."""
     import yt_dlp
     import urllib.parse as urlparse
     from core.db import get_cached_playlist, save_playlist_to_cache
@@ -805,7 +805,79 @@ async def extract_youtube_playlist(playlist_url: str) -> Optional[list]:
         print(f"[Scraper/playlist] Instant DB Cache Hit for playlist ID '{playlist_id}' ({len(cached)} tracks)!")
         return cached
 
-    # 2. Fast GAMEOVER FastAPI Backend /api/playlist check
+    # 2. Fast Invidious REST API Playlist Endpoint (0.3s)
+    if playlist_id:
+        inv_mirrors = ["https://invidious.projectsegfau.lt", "https://inv.nadeko.net", "https://yewtu.be"]
+        inv_headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
+        for mirror in inv_mirrors:
+            try:
+                inv_api_url = f"{mirror}/api/v1/playlists/{playlist_id}"
+                async with aiohttp.ClientSession(headers=inv_headers, timeout=aiohttp.ClientTimeout(total=2.5)) as session:
+                    async with session.get(inv_api_url) as resp:
+                        if resp.status == 200:
+                            data = await resp.json()
+                            videos = data.get("videos", [])
+                            if videos:
+                                result = []
+                                for v in videos[:50]:
+                                    v_id = v.get("videoId")
+                                    if v_id:
+                                        result.append({
+                                            "title": v.get("title") or "YouTube Song",
+                                            "url": f"https://www.youtube.com/watch?v={v_id}",
+                                            "id": v_id
+                                        })
+                                if result:
+                                    print(f"[Scraper/playlist] Invidious API extracted {len(result)} tracks for playlist '{playlist_id}'!")
+                                    save_playlist_to_cache(playlist_id, result)
+                                    return result
+            except Exception as e:
+                print(f"[Scraper/playlist] Invidious mirror {mirror} note: {e}")
+
+    # 3. Direct YouTube Playlist Page HTML Scraping (0.8s)
+    if playlist_id:
+        try:
+            pl_page_url = f"https://www.youtube.com/playlist?list={playlist_id}"
+            connector = get_doh_connector()
+            html_headers = {
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
+                "Accept-Language": "en-US,en;q=0.9",
+            }
+            async with aiohttp.ClientSession(connector=connector, headers=html_headers) as session:
+                async with session.get(pl_page_url, timeout=aiohttp.ClientTimeout(total=4)) as resp:
+                    if resp.status == 200:
+                        html = await resp.text()
+                        matches = re.findall(r'"playlistVideoRenderer":\{"videoId":"([a-zA-Z0-9_-]{11})".*?"title":\{"runs":\[\{"text":"([^"]+)"', html)
+                        if not matches:
+                            v_ids = re.findall(r'"videoId":"([a-zA-Z0-9_-]{11})"', html)
+                            seen_set = set()
+                            matches = []
+                            for vid in v_ids:
+                                if vid not in seen_set:
+                                    seen_set.add(vid)
+                                    matches.append((vid, "YouTube Track"))
+
+                        if matches:
+                            res_html = []
+                            seen_vids = set()
+                            for vid, vtitle in matches:
+                                if vid not in seen_vids:
+                                    seen_vids.add(vid)
+                                    res_html.append({
+                                        "title": vtitle or "YouTube Song",
+                                        "url": f"https://www.youtube.com/watch?v={vid}",
+                                        "id": vid
+                                    })
+                                    if len(res_html) >= 50:
+                                        break
+                            if res_html:
+                                print(f"[Scraper/playlist] Direct HTML extracted {len(res_html)} tracks for playlist '{playlist_id}'!")
+                                save_playlist_to_cache(playlist_id, res_html)
+                                return res_html
+        except Exception as e:
+            print(f"[Scraper/playlist] Direct HTML parse note: {e}")
+
+    # 4. Fast GAMEOVER FastAPI Backend /api/playlist check (1.5s max timeout)
     try:
         import os
         api_base = os.getenv("API_BASE_URL", "http://127.0.0.1:8000")
@@ -814,7 +886,7 @@ async def extract_youtube_playlist(playlist_url: str) -> Optional[list]:
 
         connector = get_doh_connector()
         async with aiohttp.ClientSession(connector=connector) as session:
-            async with session.get(url, timeout=aiohttp.ClientTimeout(total=20)) as resp:
+            async with session.get(url, timeout=aiohttp.ClientTimeout(total=1.5)) as resp:
                 if resp.status == 200:
                     data = await resp.json()
                     if data.get("status") == "success" and data.get("videos"):
@@ -829,16 +901,7 @@ async def extract_youtube_playlist(playlist_url: str) -> Optional[list]:
     except Exception as e:
         print(f"[Scraper/playlist] FastAPI playlist note: {e}")
 
-    # Rewrite YouTube Mix / dynamic playlist links redirecting to homepage to watch mix URLs
-    if "playlist?list=" in playlist_url:
-        try:
-            if playlist_id and (playlist_id.startswith('RD') or playlist_id.startswith('UL')) and len(playlist_id) == 13:
-                video_id = playlist_id[2:]
-                playlist_url = f"https://www.youtube.com/watch?v={video_id}&list={playlist_id}"
-                print(f"[Scraper/playlist] Rewrote Mix playlist link to watch URL: {playlist_url}")
-        except Exception as e:
-            print(f"[Scraper/playlist] URL rewrite failed: {e}")
-    
+    # 5. yt-dlp fallback flat extraction
     def extract():
         ydl_opts = {
             'extract_flat': 'in_playlist',
