@@ -156,6 +156,12 @@ async def _scrape_invidious_playwright_browser(video_id: str, mode: str) -> Opti
                     await page.wait_for_timeout(2000)
                     title = await page.title()
 
+                from core.scrapers import _is_bad_title, fetch_oembed_title
+                if _is_bad_title(title):
+                    real_t = await fetch_oembed_title(video_id)
+                    if real_t:
+                        title = real_t
+
                 html = await page.content()
 
                 # 1. HTML source regex match for direct Invidious /latest_version download links

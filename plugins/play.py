@@ -718,6 +718,8 @@ def register(app: Client):
         if chat_id in player_manager.autoplay_chats:
             player_manager.autoplay_chats.remove(chat_id)
             player_manager.autoplay_next_rec.pop(chat_id, None)
+            player_manager.autoplay_users.pop(chat_id, None)
+            player_manager.autoplay_user_ids.pop(chat_id, None)
             await message.reply_text(make_card(
                 f"{ROYAL_HEADER}🛑 <b>Auto-Play Mode Disabled!</b>\n\n"
                 f"• <b>Status:</b> <code>OFF</code>\n"
@@ -725,6 +727,8 @@ def register(app: Client):
             ))
         else:
             player_manager.autoplay_chats.add(chat_id)
+            player_manager.autoplay_users[chat_id] = user_name
+            player_manager.autoplay_user_ids[chat_id] = user_id
             asyncio.create_task(player_manager.trigger_autoplay_prefetch(chat_id))
             cur_mode = player_manager.last_played_mode.get(chat_id, "video").title()
             await message.reply_text(make_card(
@@ -802,12 +806,18 @@ def register(app: Client):
             if chat_id not in player_manager.active_calls:
                 await query.answer("⚠️ No active Voice Chat stream! Start streaming a song first.", show_alert=True)
                 return
+            user_name = query.from_user.first_name if query.from_user else "User"
+            user_id = query.from_user.id if query.from_user else 0
             if chat_id in player_manager.autoplay_chats:
                 player_manager.autoplay_chats.remove(chat_id)
                 player_manager.autoplay_next_rec.pop(chat_id, None)
+                player_manager.autoplay_users.pop(chat_id, None)
+                player_manager.autoplay_user_ids.pop(chat_id, None)
                 await query.answer("🛑 Auto-Play Disabled!", show_alert=True)
             else:
                 player_manager.autoplay_chats.add(chat_id)
+                player_manager.autoplay_users[chat_id] = user_name
+                player_manager.autoplay_user_ids[chat_id] = user_id
                 asyncio.create_task(player_manager.trigger_autoplay_prefetch(chat_id))
                 await query.answer("🔀 Auto-Play Enabled! Pre-fetching recommendation in background...", show_alert=True)
         current_title = player_manager.stream_title.get(chat_id, "Unknown Title")

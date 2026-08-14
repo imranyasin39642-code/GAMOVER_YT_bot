@@ -355,12 +355,22 @@ class PlayerManager:
 
         # Auto-Play & Shuffle state
         self.autoplay_chats: set[int] = set()          # chat_id -> set of chats with Auto-Play enabled
+        self.autoplay_users: dict[int, str] = {}       # chat_id -> name of user who enabled Auto-Play
+        self.autoplay_user_ids: dict[int, int] = {}    # chat_id -> user_id of user who enabled Auto-Play
         self.last_played_title: dict[int, str] = {}    # chat_id -> last played track title
         self.last_played_videoid: dict[int, str] = {}  # chat_id -> last played video ID
         self.last_played_mode: dict[int, str] = {}     # chat_id -> last played mode (video/audio)
         self.autoplay_recent_ids: dict[int, list] = {} # chat_id -> list of recently played video IDs (anti-repeat)
         self.autoplay_next_rec: dict[int, dict] = {}   # chat_id -> pre-fetched next autoplay recommendation
         self.listener_monitors: dict[int, asyncio.Task] = {} # chat_id -> 0-listener background monitor task
+
+    def get_autoplay_requested_by(self, chat_id: int) -> tuple:
+        """Return clean requested_by string and requester user_id for AutoPlay (NO EMOJIS per user request)."""
+        user_name = self.autoplay_users.get(chat_id)
+        user_id = self.autoplay_user_ids.get(chat_id, 0)
+        if user_name:
+            return f"AutoPlay ... {user_name}", user_id
+        return "AutoPlay", 0
 
     def shuffle_queue(self, chat_id: int) -> bool:
         """Shuffles upcoming songs in queue randomly."""
@@ -758,11 +768,13 @@ class PlayerManager:
 
                         # Silently start next track — no group message during autoplay search
                         print(f"[Player/AutoPlay] Auto-playing recommendation: {rec.get('title')} ({rec_vid})")
+                        req_by, req_id = self.get_autoplay_requested_by(chat_id)
                         await self.play(
                             chat_id=chat_id,
                             youtube_url=rec["url"],
                             mode=mode,
-                            requested_by="GAMEOVER AutoPlay 🎬"
+                            requested_by=req_by,
+                            requested_by_id=req_id
                         )
                     else:
                         # Autoplay could not find recommendation after retries — silently stop
@@ -1727,12 +1739,14 @@ class PlayerManager:
                     chat_id,
                     f"{ROYAL_HEADER}⏭ <b>Skipping...</b> Auto-playing: <code>{rec.get('title')}</code>"
                 )
+                req_by, req_id = self.get_autoplay_requested_by(chat_id)
                 asyncio.create_task(self.play(
                     chat_id=chat_id,
                     youtube_url=rec["url"],
                     mode=mode,
                     status_msg=status_msg,
-                    requested_by="GAMEOVER AutoPlay 🎬"
+                    requested_by=req_by,
+                    requested_by_id=req_id
                 ))
                 return True
             else:

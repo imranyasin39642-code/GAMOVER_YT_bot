@@ -24,6 +24,47 @@ def is_youtube_url(text: str) -> bool:
     return bool(re.search(r'(?:youtube\.com|youtu\.be)', text, re.IGNORECASE))
 
 
+def _is_bad_title(title: Optional[str]) -> bool:
+    """Return True if title is empty or matches YouTube consent/login prompt fallback titles."""
+    if not title or not isinstance(title, str):
+        return True
+    t_lower = title.strip().lower()
+    bad_phrases = [
+        "want to watch this again later",
+        "sign in to youtube",
+        "before you continue to youtube",
+        "youtube video",
+        "youtube stream",
+        "related track",
+        "gandalf",
+    ]
+    if t_lower in ["youtube", "sign in", "login", "null", "undefined"]:
+        return True
+    for phrase in bad_phrases:
+        if phrase in t_lower:
+            return True
+    return False
+
+
+async def fetch_oembed_title(video_id: str) -> Optional[str]:
+    """Fetch 100% accurate title via YouTube 0-cookie oEmbed API (0.2s response)."""
+    if not video_id:
+        return None
+    try:
+        url = f"https://www.youtube.com/oembed?url=https://www.youtube.com/watch?v={video_id}&format=json"
+        connector = get_doh_connector()
+        async with aiohttp.ClientSession(connector=connector) as session:
+            async with session.get(url, timeout=aiohttp.ClientTimeout(total=2.5)) as resp:
+                if resp.status == 200:
+                    data = await resp.json()
+                    t = data.get("title")
+                    if t and not _is_bad_title(t):
+                        return t.strip()
+    except Exception as e:
+        print(f"[oEmbedTitle] Note for {video_id}: {e}")
+    return None
+
+
 def _is_short_video(video_id: str, html: str) -> bool:
     """
     Detect if a video ID belongs to a YouTube Short.
@@ -243,12 +284,20 @@ async def get_youtube_recommendations(
                                 html
                             )
                             title = title_match.group(1) if title_match else "Related Track"
+                            if _is_bad_title(title):
+                                real_t = await fetch_oembed_title(v_id)
+                                if real_t:
+                                    title = real_t
                             candidates.append({"video_id": v_id, "url": f"https://www.youtube.com/watch?v={v_id}", "title": title})
                             if len(candidates) >= 10:
                                 break
                         if candidates:
                             import random
                             pick = random.choice(candidates[:5])
+                            if _is_bad_title(pick.get("title")):
+                                real_t = await fetch_oembed_title(pick["video_id"])
+                                if real_t:
+                                    pick["title"] = real_t
                             print(f"[AutoPlay] Picked recommendation: {pick['title']} ({pick['video_id']})")
                             return pick
         except Exception as e:
@@ -263,6 +312,14 @@ async def get_youtube_recommendations(
     if result and result.get("video_id") in excluded:
         query2 = f"{last_title} {random.choice(suffixes)}" if last_title else "new trending music 2024"
         result = await search_youtube(query2)
+
+    if result and _is_bad_title(result.get("title")):
+        v_id = result.get("video_id")
+        if v_id:
+            real_t = await fetch_oembed_title(v_id)
+            if real_t:
+                result["title"] = real_t
+
     return result
 
 
@@ -278,6 +335,23 @@ async def resolve_query_to_url(input_query: str) -> Optional[str]:
     if res and res.get("url"):
         return res["url"]
     return None
+
+
+async def _ensure_valid_title(res: Optional[Dict[str, str]], fallback_video_id: str = "") -> Optional[Dict[str, str]]:
+    if not res or not isinstance(res, dict):
+        return res
+    curr_t = res.get("title")
+    if _is_bad_title(curr_t):
+        v_id = fallback_video_id or extract_video_id(res.get("url") or "") or extract_video_id(res.get("video_id") or "")
+        if v_id:
+            real_t = await fetch_oembed_title(v_id)
+            if real_t:
+                res["title"] = real_t
+            else:
+                res["title"] = "YouTube Stream"
+        else:
+            res["title"] = "YouTube Stream"
+    return res
 
 
 async def resolve_stream_url(input_query: str, mode: str = "video") -> Optional[Dict[str, str]]:
@@ -298,7 +372,7 @@ async def resolve_stream_url(input_query: str, mode: str = "video") -> Optional[
         print(f"[Scraper/Bypass] Direct YouTube link detected ({video_id}). Executing Playwright/Invidious Engine...")
         res = await extract_stream_playwright(video_id, mode)
         if res and res.get("url"):
-            return res
+            return await _ensure_valid_title(res, video_id)
     else:
         # Text Search Query: Fast HTML search in 0.8s (Zero Dead API Delays!)
         print(f"[Scraper/FastSearch] Resolving search query: '{input_query}'...")
@@ -309,8 +383,9 @@ async def resolve_stream_url(input_query: str, mode: str = "video") -> Optional[
             search_title = search_fallback.get("title")
             res = await extract_stream_playwright(v_id, mode)
             if res and res.get("url"):
-                res["title"] = search_title or res.get("title")
-                return res
+                if not _is_bad_title(search_title):
+                    res["title"] = search_title
+                return await _ensure_valid_title(res, v_id)
 
     # Fast 0-Cookie Web Scrapers Fallback
     if target_url:
@@ -328,11 +403,11 @@ async def resolve_stream_url(input_query: str, mode: str = "video") -> Optional[
             try:
                 res = await scraper(target_url, mode)
                 if res and res.get("url"):
-                    if search_title:
+                    if search_title and not _is_bad_title(search_title):
                         res["title"] = search_title
                     title_str = str(res.get('title', 'Media')).encode('ascii', errors='ignore').decode('ascii')
                     print(f"[Scraper/Fallback] SUCCESS via {scraper.__name__}: {title_str}")
-                    return res
+                    return await _ensure_valid_title(res, video_id or extract_video_id(target_url) or "")
 
             except Exception as e:
                 print(f"[Scraper/Fallback] Note on {scraper.__name__}: {e}")
