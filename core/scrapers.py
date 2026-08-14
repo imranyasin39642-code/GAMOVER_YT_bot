@@ -210,7 +210,7 @@ async def get_youtube_recommendations(
 
 
 # Multi-layer scraper sequence for guaranteed 100% bypass of YouTube bot/cookie checks
-SCRAPING_SITES = ["gameover_api", "ytdlp", "cobalt", "invidious", "piped", "yt5s", "yt1s", "y2mate", "9xbuddy", "ytmp3"]
+SCRAPING_SITES = ["gameover_api", "cobalt", "invidious", "piped", "yt5s", "yt1s", "y2mate", "9xbuddy", "ytmp3"]
 
 async def resolve_query_to_url(input_query: str) -> Optional[str]:
     """If input is a YouTube URL, extract clean canonical link. Otherwise search YouTube and return URL."""
@@ -259,14 +259,13 @@ async def resolve_stream_url(input_query: str, mode: str = "video") -> Optional[
     if target_url:
         print(f"[Scraper/Fallback] Playwright engine returned None. Running fast 0-cookie web scrapers for {target_url}...")
         fast_scrapers = [
-            _extract_ytdlp_direct,
             _extract_cobalt,
+            _extract_invidious,
+            _extract_piped,
             _extract_yt5s,
             _extract_yt1s,
             _extract_y2mate,
             _extract_ytmp3,
-            _extract_invidious,
-            _extract_piped,
         ]
         for scraper in fast_scrapers:
             try:
@@ -334,65 +333,6 @@ async def _extract_gameover_api(video_url: str, mode: str) -> Optional[Dict[str,
     return None
 
 
-# ─── Scraper 1: Programmatic yt-dlp Extractor (With Android/iOS Client Rotation) ──
-async def _extract_ytdlp_direct(video_url: str, mode: str) -> Optional[Dict[str, str]]:
-    """Programmatic yt-dlp extractor with Android/iOS/TV client rotation to bypass bot check."""
-    import yt_dlp
-    
-    format_spec = "bestvideo[height<=480][fps<=60]+bestaudio/bestvideo[height<=480]+bestaudio/best[height<=480]/best" if mode == "video" else "bestaudio[ext=m4a]/bestaudio[ext=webm]/bestaudio/best"
-
-    def extract():
-        ydl_opts = {
-            'format': format_spec,
-            'quiet': True,
-            'no_warnings': True,
-            'nocheckcertificate': True,
-            'socket_timeout': 30.0,
-            'retries': 10,
-            'fragment_retries': 10,
-            'extractor_retries': 10,
-            'source_address': '0.0.0.0',
-            'http_headers': {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36',
-                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
-                'Accept-Language': 'en-US,en;q=0.5',
-            },
-            'extractor_args': {
-                'youtube': {
-                    'player_client': ['android_vr', 'web_creator', 'android']
-                }
-            }
-        }
-        if Config.USE_PROXY and Config.get_proxy_url():
-            ydl_opts['proxy'] = Config.get_proxy_url()
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(video_url, download=False)
-            if not info:
-                return None
-            formats = info.get("formats", [])
-            dl_url = info.get("url") or (formats[-1].get("url") if formats else None)
-            if dl_url:
-                video_id = info.get("id", "")
-                thumbnail = info.get("thumbnail") or (
-                    f"https://img.youtube.com/vi/{video_id}/hqdefault.jpg" if video_id else ""
-                )
-                return {
-                    "url": dl_url,
-                    "title": info.get("title", "YouTube Video"),
-                    "duration": int(info.get("duration") or 0),
-                    "thumbnail": thumbnail,
-                }
-            return None
-
-    loop = asyncio.get_running_loop()
-    try:
-        res = await loop.run_in_executor(None, extract)
-        return res
-    except Exception as e:
-        print(f"[Scraper/ytdlp] Direct extraction failed: {e}")
-        return None
-
-
 # ─── Scraper 2: Cobalt API (High-Performance Multi-Instance Resolution) ────
 async def _extract_cobalt(video_url: str, mode: str) -> Optional[Dict[str, str]]:
     """Resolves direct stream URL using public Cobalt API instances."""
@@ -458,6 +398,7 @@ async def _extract_invidious(video_url: str, mode: str) -> Optional[Dict[str, st
         return None
 
     instances = [
+        "https://invidious.nerdvpn.de",
         "https://yewtu.be",
         "https://inv.nadeko.net",
         "https://invidious.drgns.space",

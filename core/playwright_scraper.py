@@ -20,6 +20,7 @@ from typing import Optional, Dict
 import aiohttp
 
 INVIDIOUS_MIRRORS = [
+    "https://invidious.nerdvpn.de",
     "https://yewtu.be",
     "https://inv.nadeko.net",
 ]
@@ -68,21 +69,20 @@ async def close_browser():
 
 async def extract_stream_playwright(video_id: str, mode: str = "audio") -> Optional[Dict[str, str]]:
     """
-    Tier 2 Multi-Engine Extractor.
-    Races yt-dlp direct, Cobalt, Piped, Invidious, YT5s, YT1s, Y2Mate, and YTmp3 IN PARALLEL for sub-second responses.
+    Tier 2 Multi-Engine Extractor (0-Cookie Web API & Scraper Pool).
+    Races Cobalt, Invidious, Piped, Loader, YT5s, YT1s, Y2Mate, and YTmp3 IN PARALLEL for sub-second responses.
     """
     clean_video_id = video_id.strip()
     yt_url = f"https://www.youtube.com/watch?v={clean_video_id}"
 
     # Import fast scrapers from core.scrapers for parallel execution
     from core.scrapers import (
-        _extract_ytdlp_direct, _extract_cobalt, _extract_piped, _extract_yt5s,
+        _extract_cobalt, _extract_piped, _extract_yt5s,
         _extract_invidious, _extract_yt1s, _extract_y2mate, _extract_ytmp3
     )
 
-    # Unified Parallel Engine Pool (yt-dlp direct + fast APIs)
+    # Unified Parallel Engine Pool (Fast Web APIs + Scrapers)
     parallel_tasks = [
-        asyncio.create_task(_extract_ytdlp_direct(yt_url, mode)),
         asyncio.create_task(_extract_cobalt(yt_url, mode)),
         asyncio.create_task(_extract_invidious(yt_url, mode)),
         asyncio.create_task(_extract_piped(yt_url, mode)),
