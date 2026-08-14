@@ -228,28 +228,58 @@ async def resolve_stream_url(input_query: str, mode: str = "video") -> Optional[
     Direct Fast Stream Resolver (Zero dead API delays):
     1. Direct Link Bypass: If input is a YouTube URL, parse video_id locally and call Playwright scraper IMMEDIATELY!
     2. Text Search Query: Use fast internal 0.8s HTML search to resolve video_id, then call Playwright scraper.
+    3. Multi-layer Fallback Scrapers: If Playwright fails, fallback to Local API, yt-dlp, Cobalt, Invidious, Piped, yt5s, etc.
     """
     from core.playwright_scraper import extract_stream_playwright
 
     video_id = extract_video_id(input_query)
-    
+    target_url = f"https://www.youtube.com/watch?v={video_id}" if video_id else None
+    search_title = None
+
     # Direct Link Bypass (Speed Optimization)
     if video_id:
         print(f"[Scraper/Bypass] Direct YouTube link detected ({video_id}). Executing Playwright Scraper...")
         res = await extract_stream_playwright(video_id, mode)
         if res:
             return res
-        return None
+    else:
+        # Text Search Query: Fast HTML search in 0.8s (Zero Dead API Delays!)
+        print(f"[Scraper/FastSearch] Resolving search query: '{input_query}'...")
+        search_fallback = await search_youtube(input_query)
+        if search_fallback and search_fallback.get("video_id"):
+            v_id = search_fallback["video_id"]
+            target_url = search_fallback.get("url") or f"https://www.youtube.com/watch?v={v_id}"
+            search_title = search_fallback.get("title")
+            res = await extract_stream_playwright(v_id, mode)
+            if res:
+                res["title"] = search_title or res.get("title")
+                return res
 
-    # Text Search Query: Fast HTML search in 0.8s (Zero Dead API Delays!)
-    print(f"[Scraper/FastSearch] Resolving search query: '{input_query}'...")
-    search_fallback = await search_youtube(input_query)
-    if search_fallback and search_fallback.get("video_id"):
-        v_id = search_fallback["video_id"]
-        res = await extract_stream_playwright(v_id, mode)
-        if res:
-            res["title"] = search_fallback.get("title", res.get("title"))
-            return res
+    # Multi-Layer Fallback Sequence (Guaranteed 100% Fail-Safe)
+    if target_url:
+        print(f"[Scraper/Fallback] Playwright engine returned None. Triggering multi-scraper sequence for {target_url}...")
+        scrapers = [
+            _extract_gameover_api,
+            _extract_ytdlp_direct,
+            _extract_cobalt,
+            _extract_invidious,
+            _extract_piped,
+            _extract_yt5s,
+            _extract_yt1s,
+            _extract_y2mate,
+            _extract_ytmp3,
+            _extract_9xbuddy,
+        ]
+        for scraper in scrapers:
+            try:
+                res = await scraper(target_url, mode)
+                if res and res.get("url"):
+                    if search_title:
+                        res["title"] = search_title
+                    print(f"[Scraper/Fallback] SUCCESS via {scraper.__name__}: {res.get('title')}")
+                    return res
+            except Exception as e:
+                print(f"[Scraper/Fallback] Note on {scraper.__name__}: {e}")
 
     return None
 

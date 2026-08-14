@@ -181,6 +181,55 @@ async def _scrape_invidious_playwright_browser(video_id: str, mode: str) -> Opti
     return None
 
 
+async def _scrape_loader_engine(video_id: str, youtube_url: str, mode: str) -> Optional[Dict[str, str]]:
+    """Loader.to Web Scraper for 1080p video and MP3 audio."""
+    clean_url = f"https://www.youtube.com/watch?v={video_id}"
+    fmt = "1080" if mode == "video" else "mp3"
+    init_url = f"https://loader.to/ajax/download.php?format={fmt}&url={urllib.parse.quote(clean_url)}"
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
+        "Referer": "https://en.loader.to/"
+    }
+
+    try:
+        async with aiohttp.ClientSession(headers=headers) as session:
+            async with session.get(init_url, timeout=aiohttp.ClientTimeout(total=10)) as resp:
+                if resp.status != 200:
+                    return None
+                data = await resp.json(content_type=None)
+                if not data.get("success"):
+                    return None
+
+                progress_url = data.get("progress_url")
+                title = data.get("title") or (data.get("info") or {}).get("title") or "YouTube Video"
+                thumbnail = (data.get("info") or {}).get("image") or f"https://i.ytimg.com/vi/{video_id}/hqdefault.jpg"
+
+                if not progress_url:
+                    return None
+
+            # Poll progress URL for up to 12 seconds
+            for _ in range(10):
+                await asyncio.sleep(1.0)
+                try:
+                    async with session.get(progress_url, timeout=aiohttp.ClientTimeout(total=6)) as resp2:
+                        if resp2.status == 200:
+                            pdata = await resp2.json(content_type=None)
+                            dl_url = pdata.get("download_url")
+                            if dl_url and dl_url.startswith("http") and not dl_url.endswith(".html"):
+                                return {
+                                    "url": dl_url,
+                                    "title": pdata.get("title") or title,
+                                    "duration": int(pdata.get("video_duration") or 0),
+                                    "thumbnail": thumbnail,
+                                }
+                except Exception as e:
+                    print(f"[Tier2/Loader] Poll note: {e}")
+    except Exception as e:
+        print(f"[Tier2/Loader] Error: {e}")
+
+    return None
+
+
 async def _scrape_invidious_api_fast(mirror_base: str, video_id: str, mode: str) -> Optional[Dict[str, str]]:
     """Fast Invidious REST API parser."""
     api_url = f"{mirror_base.rstrip('/')}/api/v1/videos/{video_id}"
