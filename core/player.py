@@ -350,6 +350,8 @@ class PlayerManager:
         self.in_effects_menu: set[int] = set()         # chat_id -> active viewing of effects menu
         self.is_changing_effect: set[int] = set()      # chat_id -> currently applying audio effect filter
         self.effect_ignore_until: dict[int, float] = {} # chat_id -> timestamp until which stream_end is ignored
+        self.is_resolving: set[int] = set()           # chat_id -> currently resolving or starting stream
+        self.chat_locks: dict[int, asyncio.Lock] = {}  # chat_id -> per-chat execution lock
 
         # Auto-Play & Shuffle state
         self.autoplay_chats: set[int] = set()          # chat_id -> set of chats with Auto-Play enabled
@@ -1137,44 +1139,54 @@ class PlayerManager:
                 await status_msg.edit_text(make_card("❌ <b>Invalid YouTube link or search query!</b>"))
             return False
 
-        # If a stream is already active in this chat, add it to the queue instead of playing immediately
-        if chat_id in self.active_calls:
-            # Resolve title for the queue card
-            res = await resolve_stream_url(youtube_url, mode)
-            q_title = res["title"] if res else "YouTube Video"
-            
-            if chat_id not in self.queues:
-                self.queues[chat_id] = []
-            
-            self.queues[chat_id].append({
-                "url": youtube_url,
-                "mode": mode,
-                "title": q_title,
-                "requested_by": requested_by,
-                "requested_by_id": requested_by_id
-            })
-            
-            req_by_str = ""
-            if requested_by and requested_by_id:
-                req_by_str = f"<b>Requested by:</b> <a href=\"tg://user?id={requested_by_id}\">{requested_by}</a>"
+        # Per-chat lock to avoid race conditions when multiple play requests arrive concurrently
+        if chat_id not in self.chat_locks:
+            self.chat_locks[chat_id] = asyncio.Lock()
 
-            pos = len(self.queues[chat_id])
-            if status_msg:
-                try:
-                    await status_msg.edit_text(
-                        f"{ROYAL_HEADER}"
-                        f"<b>Upcoming Track: #{pos}</b>\n\n"
-                        f"<b>Title:</b> <a href=\"{youtube_url}\">{q_title}</a>\n"
-                        f"{req_by_str}",
-                        disable_web_page_preview=True,
-                        parse_mode=enums.ParseMode.HTML
-                    )
-                except Exception:
-                    pass
-            
-            # Pre-download in the background to ensure instant play when current track ends
-            asyncio.create_task(self._background_pre_download(chat_id, youtube_url, mode, q_title))
-            return True
+        async with self.chat_locks[chat_id]:
+            # If a stream is active OR currently resolving/starting in this chat, queue the request cleanly
+            if chat_id in self.active_calls or chat_id in self.is_resolving:
+                _fresh_title = locals().get("_fresh_title", "")
+                q_title = _fresh_title
+                if not q_title:
+                    res = await resolve_stream_url(youtube_url, mode)
+                    q_title = res["title"] if res else "YouTube Video"
+                
+                if chat_id not in self.queues:
+                    self.queues[chat_id] = []
+                
+                self.queues[chat_id].append({
+                    "url": youtube_url,
+                    "mode": mode,
+                    "title": q_title,
+                    "requested_by": requested_by,
+                    "requested_by_id": requested_by_id
+                })
+                
+                req_by_str = ""
+                if requested_by and requested_by_id:
+                    req_by_str = f"<b>Requested by:</b> <a href=\"tg://user?id={requested_by_id}\">{requested_by}</a>"
+
+                pos = len(self.queues[chat_id])
+                if status_msg:
+                    try:
+                        await status_msg.edit_text(
+                            f"{ROYAL_HEADER}"
+                            f"<b>Upcoming Track: #{pos}</b>\n\n"
+                            f"<b>Title:</b> <a href=\"{youtube_url}\">{q_title}</a>\n"
+                            f"{req_by_str}",
+                            disable_web_page_preview=True,
+                            parse_mode=enums.ParseMode.HTML
+                        )
+                    except Exception:
+                        pass
+                
+                # Pre-download in the background to ensure instant play when current track ends
+                asyncio.create_task(self._background_pre_download(chat_id, youtube_url, mode, q_title))
+                return True
+
+            # Mark chat as resolving stream to block concurrent stream starts
+            self.is_resolving.add(chat_id)
 
         # Cancel any active idle timer since we are about to start a new stream
         self._cancel_idle_timer(chat_id)
@@ -1433,6 +1445,7 @@ class PlayerManager:
                         raise play_err2
 
             self.active_calls.add(chat_id)
+            self.is_resolving.discard(chat_id)
             self.in_call_chats.add(chat_id)
             self.active_files[chat_id] = local_path
             self.active_requester_id[chat_id] = requested_by_id
@@ -1636,6 +1649,8 @@ class PlayerManager:
                 except Exception:
                     pass
             return False
+        finally:
+            self.is_resolving.discard(chat_id)
 
     async def skip(self, chat_id: int) -> bool:
         """Skip current track → play next in queue, or trigger autoplay in matching mode if queue is empty."""
