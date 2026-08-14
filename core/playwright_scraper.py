@@ -23,7 +23,10 @@ INVIDIOUS_MIRRORS = [
     "https://invidious.nerdvpn.de",
     "https://yewtu.be",
     "https://inv.nadeko.net",
+    "https://invidious.io.lol",
 ]
+
+
 
 _PLAYWRIGHT_INSTANCE = None
 _BROWSER_INSTANCE = None
@@ -40,7 +43,12 @@ async def get_browser():
                 _PLAYWRIGHT_INSTANCE = await async_playwright().start()
                 _BROWSER_INSTANCE = await _PLAYWRIGHT_INSTANCE.chromium.launch(
                     headless=True,
-                    args=["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage"]
+                    args=[
+                        "--no-sandbox",
+                        "--disable-setuid-sandbox",
+                        "--disable-dev-shm-usage",
+                        "--disable-blink-features=AutomationControlled"
+                    ]
                 )
                 print("[Playwright] Browser pool started successfully.")
             except Exception as e:
@@ -93,6 +101,7 @@ async def extract_stream_playwright(video_id: str, mode: str = "audio") -> Optio
         asyncio.create_task(_extract_ytmp3(yt_url, mode)),
     ]
 
+
     for future in asyncio.as_completed(parallel_tasks):
         try:
             res = await future
@@ -100,10 +109,11 @@ async def extract_stream_playwright(video_id: str, mode: str = "audio") -> Optio
                 for t in parallel_tasks:
                     if not t.done():
                         t.cancel()
-                print(f"[Tier2/Parallel-Engine] INSTANT SUCCESS: {res.get('title', 'Video')[:40]}")
+                print(f"[Tier2/Parallel-Engine] INSTANT SUCCESS: {str(res.get('title', 'Video'))[:40]}")
                 return res
-        except Exception:
+        except (asyncio.CancelledError, Exception):
             pass
+
 
     # Playwright browser fallback if all API endpoints fail or timeout
     print(f"[Tier2] Fast API engines unresponsive for video_id={clean_video_id}. Attempting Playwright Chromium...")
@@ -125,19 +135,30 @@ async def _scrape_invidious_playwright_browser(video_id: str, mode: str) -> Opti
     page = None
     try:
         context = await browser.new_context(
-            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36"
+            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/127.0.0.0 Safari/537.36",
+            viewport={"width": 1280, "height": 720}
         )
+        await context.add_init_script("""
+            Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
+            window.chrome = { runtime: {} };
+        """)
         page = await context.new_page()
+
 
         for mirror in INVIDIOUS_MIRRORS:
             try:
                 target_url = f"{mirror}/watch?v={video_id}"
-                await page.goto(target_url, timeout=4000, wait_until="domcontentloaded")
-                await page.wait_for_timeout(300)
+                await page.goto(target_url, timeout=8000, wait_until="domcontentloaded")
+                await page.wait_for_timeout(800)
 
                 title = await page.title()
+                if "Gandalf" in title:
+                    await page.wait_for_timeout(2000)
+                    title = await page.title()
+
                 html = await page.content()
 
+                # 1. HTML source regex match for direct Invidious /latest_version download links
                 match_links = re.findall(r'/latest_version\?[^\s"\'<>]+', html)
                 if match_links:
                     chosen_url = None
@@ -158,16 +179,42 @@ async def _scrape_invidious_playwright_browser(video_id: str, mode: str) -> Opti
 
                     if chosen_url:
                         full_stream_url = urllib.parse.urljoin(mirror, chosen_url)
-                        print(f"[Playwright/Browser] Scraped stream URL from {mirror}: {title[:30]}")
+                        title_str = str(title).encode('ascii', errors='ignore').decode('ascii')
+                        print(f"[Playwright/Browser] Scraped Invidious stream URL from {mirror}: {title_str[:40]} -> {full_stream_url[:60]}")
                         return {
                             "url": full_stream_url,
                             "title": title.strip(),
                             "duration": 0,
                             "thumbnail": f"https://i.ytimg.com/vi/{video_id}/hqdefault.jpg"
                         }
+
+                # 2. DOM Evaluation fallback
+                try:
+                    dom_stream = await page.evaluate("""() => {
+                        const audio = document.querySelector('audio source, audio');
+                        if (audio && audio.src) return audio.src;
+                        const video = document.querySelector('video source, video');
+                        if (video && video.src) return video.src;
+                        const downloadLink = document.querySelector('a[href*="/latest_version"], a[download]');
+                        if (downloadLink && downloadLink.href) return downloadLink.href;
+                        return null;
+                    }""")
+                    if dom_stream:
+                        title_str = str(title).encode('ascii', errors='ignore').decode('ascii')
+                        print(f"[Playwright/Browser] Scraped stream URL via DOM from {mirror}: {title_str[:40]}")
+                        return {
+                            "url": dom_stream,
+                            "title": title.strip(),
+                            "duration": 0,
+                            "thumbnail": f"https://i.ytimg.com/vi/{video_id}/hqdefault.jpg"
+                        }
+                except Exception:
+                    pass
+
             except Exception as mirror_err:
                 print(f"[Playwright/Browser] Mirror {mirror} note: {mirror_err}")
                 continue
+
 
     except Exception as e:
         print(f"[Playwright/Invidious] Browser scrape error: {e}")

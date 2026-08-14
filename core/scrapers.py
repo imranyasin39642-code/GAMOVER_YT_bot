@@ -8,10 +8,16 @@ from core.dns_helper import get_doh_connector
 from config import Config
 
 def extract_video_id(url: str) -> Optional[str]:
-    """Extract standard 11-char YouTube Video ID from any short or full link."""
-    pattern = r'(?:https?://)?(?:www\.)?(?:youtube\.com/(?:watch\?v=|embed/|v/)|youtu\.be/)([a-zA-Z0-9_-]{11})'
+    """Extract standard 11-char YouTube Video ID from any short, full, Invidious, Piped, or mirror link."""
+    pattern = r'(?:[?&]v=|/v/|/embed/|/watch\?v=|/shorts/|youtu\.be/)([a-zA-Z0-9_-]{11})'
     match = re.search(pattern, url)
-    return match.group(1) if match else None
+    if match:
+        return match.group(1)
+    # Direct 11-character video ID string check
+    clean = url.strip()
+    if re.match(r'^[a-zA-Z0-9_-]{11}$', clean):
+        return clean
+    return None
 
 def is_youtube_url(text: str) -> bool:
     """Return True if the text looks like a YouTube URL."""
@@ -47,10 +53,41 @@ def _is_short_video(video_id: str, html: str) -> bool:
     return False
 
 
+async def _search_invidious_html(query: str) -> Optional[Dict[str, str]]:
+    """Search invidious.nerdvpn.de HTML directly for the top video result."""
+    encoded = urllib.parse.quote(query)
+    search_url = f"https://invidious.nerdvpn.de/search?q={encoded}"
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/127.0.0.0 Safari/537.36",
+    }
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(search_url, headers=headers, timeout=aiohttp.ClientTimeout(total=3)) as resp:
+                if resp.status == 200:
+                    html = await resp.text()
+                    v_ids = re.findall(r'href="/watch\?v=([a-zA-Z0-9_-]{11})"', html)
+                    seen = set()
+                    for v_id in v_ids:
+                        if v_id in seen:
+                            continue
+                        seen.add(v_id)
+                        t_match = re.search(r'href="/watch\?v=' + re.escape(v_id) + r'"[^>]*>.*?<p[^>]*>([^<]+)</p>', html, re.DOTALL)
+                        title = t_match.group(1).strip() if t_match else query
+                        title = re.sub(r'\s+', ' ', title)
+                        v_url = f"https://www.youtube.com/watch?v={v_id}"
+                        title_str = str(title).encode('ascii', errors='ignore').decode('ascii')
+                        print(f"[Search/InvidiousHTML] Top result from invidious.nerdvpn.de: {title_str} -> {v_url}")
+                        return {"video_id": v_id, "url": v_url, "title": title}
+    except Exception as e:
+        print(f"[Search/InvidiousHTML] note: {e}")
+    return None
+
+
+
 async def _search_invidious_api(query: str) -> Optional[Dict[str, str]]:
     """Ultra-fast Invidious REST API Search Engine (0.3 seconds)."""
     encoded = urllib.parse.quote(query)
-    mirrors = ["https://yewtu.be", "https://inv.nadeko.net", "https://invidious.drgns.space"]
+    mirrors = ["https://invidious.nerdvpn.de", "https://yewtu.be", "https://inv.nadeko.net"]
     timeout = aiohttp.ClientTimeout(total=3, connect=1.5)
     headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
 
@@ -68,7 +105,8 @@ async def _search_invidious_api(query: str) -> Optional[Dict[str, str]]:
                                 length = item.get("lengthSeconds") or 0
                                 if v_id and length >= 61:  # Skip Shorts (< 61 seconds)
                                     v_url = f"https://www.youtube.com/watch?v={v_id}"
-                                    print(f"[Search/Invidious] Found in 0.3s: {title} → {v_url}")
+                                    title_str = str(title).encode('ascii', errors='ignore').decode('ascii')
+                                    print(f"[Search/Invidious] Found top result from {mirror}: {title_str} -> {v_url}")
                                     return {"video_id": v_id, "url": v_url, "title": title}
         except Exception as e:
             print(f"[Search/Invidious] Mirror {mirror} note: {e}")
@@ -77,9 +115,20 @@ async def _search_invidious_api(query: str) -> Optional[Dict[str, str]]:
 
 async def search_youtube(query: str) -> Optional[Dict[str, str]]:
     """
-    Search YouTube for a query using fast internal search + Invidious API + yt-dlp fallback.
-    Returns a dict with 'video_id', 'url', 'title' of the top NON-SHORT result in 0.5-1.5 seconds.
+    Search invidious.nerdvpn.de for a query.
+    Returns a dict with 'video_id', 'url', 'title' of the top relative result.
     """
+    # 1. Primary: Search invidious.nerdvpn.de HTML directly for top result
+    inv_html = await _search_invidious_html(query)
+    if inv_html:
+        return inv_html
+
+    # 2. Ultra-Fast Invidious REST API Search
+    res = await _search_invidious_api(query)
+    if res:
+        return res
+
+    # 3. Direct HTML Search fallback on YouTube
     encoded = urllib.parse.quote(query)
     search_url = f"https://www.youtube.com/results?search_query={encoded}"
     headers = {
@@ -107,45 +156,53 @@ async def search_youtube(query: str) -> Optional[Dict[str, str]]:
                         )
                         if title_match:
                             title = title_match.group(1)
-                        video_url = f"https://www.youtube.com/watch?v={video_id}"
-                        print(f"[Search] Fast HTML Search Found: {title} → {video_url}")
-                        return {"video_id": video_id, "url": video_url, "title": title}
+                        v_url = f"https://www.youtube.com/watch?v={video_id}"
+                        title_str = str(title).encode('ascii', errors='ignore').decode('ascii')
+                        print(f"[Search] Fast HTML Search Found: {title_str} -> {v_url}")
+                        return {"video_id": video_id, "url": v_url, "title": title}
+
     except Exception as e:
         print(f"[Search] Fast HTML search note: {e}")
 
-    # Ultra-Fast Invidious REST API Search (0.3s)
-    res = await _search_invidious_api(query)
-    if res:
-        return res
-
-    # Fast yt-dlp search fallback
+    # 4. Piped REST API Search Fallback (0-cookie)
     try:
-        import yt_dlp
-        ydl_opts = {
-            'extract_flat': 'in_playlist',
-            'skip_download': True,
-            'quiet': True,
-            'no_warnings': True,
-            'socket_timeout': 4,
-        }
-        loop = asyncio.get_event_loop()
-        def _flat_search():
-            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                return ydl.extract_info(f"ytsearch5:{query}", download=False)
-        info = await loop.run_in_executor(None, _flat_search)
-        if info and 'entries' in info and info['entries']:
-            for entry in info['entries']:
-                v_id = entry.get('id')
-                v_title = entry.get('title', query)
-                duration = entry.get('duration') or 0
-                if v_id and duration >= 61:  # Skip Shorts (< 61 seconds)
-                    v_url = f"https://www.youtube.com/watch?v={v_id}"
-                    print(f"[Search] yt-dlp search found: {v_title} → {v_url}")
-                    return {"video_id": v_id, "url": v_url, "title": v_title}
+        piped_res = await _search_piped_api(query)
+        if piped_res:
+            return piped_res
     except Exception as e:
-        print(f"[Search] yt-dlp search fallback error: {e}")
+        print(f"[Search] Piped search note: {e}")
 
     return None
+
+
+
+async def _search_piped_api(query: str) -> Optional[Dict[str, str]]:
+    """Fast Piped REST API Search Fallback (0-cookie)."""
+    encoded = urllib.parse.quote(query)
+    instances = [
+        "https://pipedapi.kavin.rocks",
+        "https://pipedapi.adminforge.de",
+    ]
+    timeout = aiohttp.ClientTimeout(total=4)
+    headers = {"User-Agent": "Mozilla/5.0"}
+    for inst in instances:
+        try:
+            url = f"{inst}/search?q={encoded}&filter=videos"
+            async with aiohttp.ClientSession(timeout=timeout, headers=headers) as session:
+                async with session.get(url) as resp:
+                    if resp.status == 200:
+                        data = await resp.json()
+                        items = data.get("items", [])
+                        for item in items:
+                            v_url = item.get("url", "")
+                            v_id = extract_video_id(v_url)
+                            if v_id:
+                                title = item.get("title", query)
+                                return {"video_id": v_id, "url": f"https://www.youtube.com/watch?v={v_id}", "title": title}
+        except Exception:
+            continue
+    return None
+
 
 
 async def get_youtube_recommendations(
@@ -273,12 +330,16 @@ async def resolve_stream_url(input_query: str, mode: str = "video") -> Optional[
                 if res and res.get("url"):
                     if search_title:
                         res["title"] = search_title
-                    print(f"[Scraper/Fallback] SUCCESS via {scraper.__name__}: {res.get('title')}")
+                    title_str = str(res.get('title', 'Media')).encode('ascii', errors='ignore').decode('ascii')
+                    print(f"[Scraper/Fallback] SUCCESS via {scraper.__name__}: {title_str}")
                     return res
+
             except Exception as e:
                 print(f"[Scraper/Fallback] Note on {scraper.__name__}: {e}")
 
     return None
+
+
 
 
 
