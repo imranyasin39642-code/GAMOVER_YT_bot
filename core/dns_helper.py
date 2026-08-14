@@ -82,8 +82,7 @@ class DoHResolver(AbstractResolver):
 
         try:
             return await self.fallback.resolve(hostname, port, family)
-        except Exception as e:
-            print(f"[DoH] System DNS also failed for {hostname}: {e}")
+        except Exception:
             raise
 
     async def close(self) -> None:

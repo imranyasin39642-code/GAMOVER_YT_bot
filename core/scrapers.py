@@ -50,7 +50,7 @@ def _is_short_video(video_id: str, html: str) -> bool:
 async def _search_invidious_api(query: str) -> Optional[Dict[str, str]]:
     """Ultra-fast Invidious REST API Search Engine (0.3 seconds)."""
     encoded = urllib.parse.quote(query)
-    mirrors = ["https://invidious.nerdvpn.de", "https://inv.nadeko.net", "https://yewtu.be"]
+    mirrors = ["https://yewtu.be", "https://inv.nadeko.net", "https://invidious.drgns.space"]
     timeout = aiohttp.ClientTimeout(total=3, connect=1.5)
     headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
 
@@ -255,14 +255,17 @@ async def resolve_stream_url(input_query: str, mode: str = "video") -> Optional[
                 res["title"] = search_title or res.get("title")
                 return res
 
-    # Fast 0-Cookie Web Scrapers Fallback (No yt-dlp cookie errors, No local API dead delays)
+    # Fast 0-Cookie Web Scrapers Fallback
     if target_url:
         print(f"[Scraper/Fallback] Playwright engine returned None. Running fast 0-cookie web scrapers for {target_url}...")
         fast_scrapers = [
             _extract_cobalt,
+            _extract_yt5s,
+            _extract_yt1s,
+            _extract_y2mate,
+            _extract_ytmp3,
             _extract_invidious,
             _extract_piped,
-            _extract_yt5s,
         ]
         for scraper in fast_scrapers:
             try:
@@ -276,6 +279,7 @@ async def resolve_stream_url(input_query: str, mode: str = "video") -> Optional[
                 print(f"[Scraper/Fallback] Note on {scraper.__name__}: {e}")
 
     return None
+
 
 
 # --- Scraper 0: GAMEOVER Local PC API Extractor (STRICTLY METADATA ONLY - 0% MEDIA LOAD ON PC) ----
@@ -453,10 +457,11 @@ async def _extract_invidious(video_url: str, mode: str) -> Optional[Dict[str, st
         return None
 
     instances = [
-        "https://inv.tux.pizza",
-        "https://invidious.nerdvpn.de",
-        "https://vid.puffyan.us",
         "https://yewtu.be",
+        "https://inv.nadeko.net",
+        "https://invidious.drgns.space",
+        "https://inv.tux.pizza",
+        "https://invidious.lunar.icu",
     ]
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
@@ -502,7 +507,9 @@ async def _extract_piped(video_url: str, mode: str) -> Optional[Dict[str, str]]:
 
     instances = [
         "https://pipedapi.kavin.rocks",
-        "https://api.piped.privacydev.net",
+        "https://pipedapi.tokhmi.xyz",
+        "https://pipedapi.adminforge.de",
+        "https://pipedapi.astro.yt",
     ]
     headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)", "Accept": "application/json"}
     connector = get_doh_connector()

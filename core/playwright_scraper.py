@@ -20,10 +20,11 @@ from typing import Optional, Dict
 import aiohttp
 
 INVIDIOUS_MIRRORS = [
-    "https://invidious.nerdvpn.de",
-    "https://invidious.projectsegfau.lt",
-    "https://inv.nadeko.net",
     "https://yewtu.be",
+    "https://inv.nadeko.net",
+    "https://invidious.drgns.space",
+    "https://inv.tux.pizza",
+    "https://invidious.lunar.icu",
 ]
 
 _PLAYWRIGHT_INSTANCE = None
@@ -71,22 +72,27 @@ async def close_browser():
 async def extract_stream_playwright(video_id: str, mode: str = "audio") -> Optional[Dict[str, str]]:
     """
     Tier 2 Multi-Engine Parallel Extractor.
-    Races Cobalt, Loader Engine, Piped, Invidious REST API, and YT5s IN PARALLEL for sub-second responses.
-    Allows multiple concurrent users in same/different groups without initial failure delay.
+    Races Cobalt, Loader, Piped, Invidious, YT5s, YT1s, Y2Mate, and YTmp3 IN PARALLEL for sub-second responses.
     """
     clean_video_id = video_id.strip()
     yt_url = f"https://www.youtube.com/watch?v={clean_video_id}"
 
-    # Import fast scrapers from core.scrapers for parallel execution
-    from core.scrapers import _extract_cobalt, _extract_piped, _extract_yt5s, _extract_invidious
+    # Import all fast scrapers from core.scrapers for parallel execution
+    from core.scrapers import (
+        _extract_cobalt, _extract_piped, _extract_yt5s, _extract_invidious,
+        _extract_yt1s, _extract_y2mate, _extract_ytmp3
+    )
 
-    # Unified Parallel Engine Pool (High performance fast working scrapers FIRST)
+    # Unified Parallel Engine Pool
     parallel_tasks = [
         asyncio.create_task(_extract_cobalt(yt_url, mode)),
         asyncio.create_task(_scrape_loader_engine(clean_video_id, yt_url, mode)),
+        asyncio.create_task(_extract_yt5s(yt_url, mode)),
+        asyncio.create_task(_extract_yt1s(yt_url, mode)),
+        asyncio.create_task(_extract_y2mate(yt_url, mode)),
+        asyncio.create_task(_extract_ytmp3(yt_url, mode)),
         asyncio.create_task(_extract_piped(yt_url, mode)),
         asyncio.create_task(_extract_invidious(yt_url, mode)),
-        asyncio.create_task(_extract_yt5s(yt_url, mode)),
     ]
 
     for mirror in INVIDIOUS_MIRRORS:
@@ -115,7 +121,7 @@ async def extract_stream_playwright(video_id: str, mode: str = "audio") -> Optio
 
 
 async def _scrape_invidious_playwright_browser(video_id: str, mode: str) -> Optional[Dict[str, str]]:
-    """Playwright Chromium headless browser scraper using isolated browser contexts for true multitasking."""
+    """Playwright Chromium headless browser scraper iterating active Invidious mirrors."""
     browser = await get_browser()
     if not browser:
         return None
@@ -127,44 +133,49 @@ async def _scrape_invidious_playwright_browser(video_id: str, mode: str) -> Opti
             user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36"
         )
         page = await context.new_page()
-        target_url = f"https://invidious.nerdvpn.de/watch?v={video_id}"
-        await page.goto(target_url, timeout=12000, wait_until="domcontentloaded")
-        await page.wait_for_timeout(1000)
 
-        title = await page.title()
-        html = await page.content()
+        for mirror in INVIDIOUS_MIRRORS:
+            try:
+                target_url = f"{mirror}/watch?v={video_id}"
+                await page.goto(target_url, timeout=9000, wait_until="domcontentloaded")
+                await page.wait_for_timeout(500)
 
-        # Find direct latest_version video or audio URLs in HTML
-        match_links = re.findall(r'/latest_version\?[^\s"\'<>]+', html)
-        if match_links:
-            chosen_url = None
-            if mode == "video":
-                # Prefer 1080p or mp4
-                for l in match_links:
-                    if "1080" in l or "mp4" in l or "itag=22" in l or "itag=137" in l:
-                        chosen_url = l
-                        break
-                if not chosen_url:
-                    chosen_url = match_links[0]
-            else:
-                # Audio mode: prefer m4a or audio itags (140, 251)
-                for l in match_links:
-                    if "m4a" in l or "audio" in l or "itag=140" in l or "itag=251" in l:
-                        chosen_url = l
-                        break
-                if not chosen_url:
-                    chosen_url = match_links[-1]
+                title = await page.title()
+                html = await page.content()
 
-            if chosen_url:
-                full_stream_url = urllib.parse.urljoin("https://invidious.nerdvpn.de", chosen_url)
-                return {
-                    "url": full_stream_url,
-                    "title": title.strip(),
-                    "duration": 0,
-                    "thumbnail": f"https://i.ytimg.com/vi/{video_id}/hqdefault.jpg"
-                }
+                match_links = re.findall(r'/latest_version\?[^\s"\'<>]+', html)
+                if match_links:
+                    chosen_url = None
+                    if mode == "video":
+                        for l in match_links:
+                            if "1080" in l or "mp4" in l or "itag=22" in l or "itag=137" in l:
+                                chosen_url = l
+                                break
+                        if not chosen_url:
+                            chosen_url = match_links[0]
+                    else:
+                        for l in match_links:
+                            if "m4a" in l or "audio" in l or "itag=140" in l or "itag=251" in l:
+                                chosen_url = l
+                                break
+                        if not chosen_url:
+                            chosen_url = match_links[-1]
+
+                    if chosen_url:
+                        full_stream_url = urllib.parse.urljoin(mirror, chosen_url)
+                        print(f"[Playwright/Browser] Scraped stream URL from {mirror}: {title[:30]}")
+                        return {
+                            "url": full_stream_url,
+                            "title": title.strip(),
+                            "duration": 0,
+                            "thumbnail": f"https://i.ytimg.com/vi/{video_id}/hqdefault.jpg"
+                        }
+            except Exception as mirror_err:
+                print(f"[Playwright/Browser] Mirror {mirror} note: {mirror_err}")
+                continue
+
     except Exception as e:
-        print(f"[Playwright/Invidious] Browser scrape note: {e}")
+        print(f"[Playwright/Invidious] Browser scrape error: {e}")
     finally:
         if page:
             try:
