@@ -225,10 +225,10 @@ async def resolve_query_to_url(input_query: str) -> Optional[str]:
 
 async def resolve_stream_url(input_query: str, mode: str = "video") -> Optional[Dict[str, str]]:
     """
-    Direct Fast Stream Resolver (Zero dead API delays):
-    1. Direct Link Bypass: If input is a YouTube URL, parse video_id locally and call Playwright scraper IMMEDIATELY!
-    2. Text Search Query: Use fast internal 0.8s HTML search to resolve video_id, then call Playwright scraper.
-    3. Multi-layer Fallback Scrapers: If Playwright fails, fallback to Local API, yt-dlp, Cobalt, Invidious, Piped, yt5s, etc.
+    Ultra-Fast 0-Cookie Stream Resolver (10-15s MAX):
+    1. Direct Link Bypass: Parse video_id and execute Playwright / Invidious API scraper immediately.
+    2. Text Search Query: Fast 0.8s HTML search -> extract_stream_playwright.
+    3. Fast 0-Cookie Fallback: Cobalt -> Invidious -> Piped -> yt5s (NO yt-dlp cookie errors, NO local API dead delays).
     """
     from core.playwright_scraper import extract_stream_playwright
 
@@ -238,9 +238,9 @@ async def resolve_stream_url(input_query: str, mode: str = "video") -> Optional[
 
     # Direct Link Bypass (Speed Optimization)
     if video_id:
-        print(f"[Scraper/Bypass] Direct YouTube link detected ({video_id}). Executing Playwright Scraper...")
+        print(f"[Scraper/Bypass] Direct YouTube link detected ({video_id}). Executing Playwright/Invidious Engine...")
         res = await extract_stream_playwright(video_id, mode)
-        if res:
+        if res and res.get("url"):
             return res
     else:
         # Text Search Query: Fast HTML search in 0.8s (Zero Dead API Delays!)
@@ -251,26 +251,20 @@ async def resolve_stream_url(input_query: str, mode: str = "video") -> Optional[
             target_url = search_fallback.get("url") or f"https://www.youtube.com/watch?v={v_id}"
             search_title = search_fallback.get("title")
             res = await extract_stream_playwright(v_id, mode)
-            if res:
+            if res and res.get("url"):
                 res["title"] = search_title or res.get("title")
                 return res
 
-    # Multi-Layer Fallback Sequence (Guaranteed 100% Fail-Safe)
+    # Fast 0-Cookie Web Scrapers Fallback (No yt-dlp cookie errors, No local API dead delays)
     if target_url:
-        print(f"[Scraper/Fallback] Playwright engine returned None. Triggering multi-scraper sequence for {target_url}...")
-        scrapers = [
-            _extract_gameover_api,
-            _extract_ytdlp_direct,
+        print(f"[Scraper/Fallback] Playwright engine returned None. Running fast 0-cookie web scrapers for {target_url}...")
+        fast_scrapers = [
             _extract_cobalt,
             _extract_invidious,
             _extract_piped,
             _extract_yt5s,
-            _extract_yt1s,
-            _extract_y2mate,
-            _extract_ytmp3,
-            _extract_9xbuddy,
         ]
-        for scraper in scrapers:
+        for scraper in fast_scrapers:
             try:
                 res = await scraper(target_url, mode)
                 if res and res.get("url"):
