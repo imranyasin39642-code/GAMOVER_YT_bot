@@ -831,16 +831,19 @@ async def _extract_9xbuddy(video_url: str, mode: str) -> Optional[Dict[str, str]
 
 
 async def extract_youtube_playlist(playlist_url: str) -> Optional[list]:
-    """Extract flat entries from a YouTube playlist quickly (up to 50 tracks) with caching & multi-fallback."""
+    """Extract flat entries from a YouTube playlist quickly (up to 50 tracks) with caching, ytInitialData & multi-fallback."""
     import yt_dlp
     import urllib.parse as urlparse
+    import json
     from core.db import get_cached_playlist, save_playlist_to_cache
 
     playlist_id = None
+    video_id = None
     try:
         parsed = urlparse.urlparse(playlist_url)
         params = urlparse.parse_qs(parsed.query)
         playlist_id = params.get('list', [None])[0]
+        video_id = params.get('v', [None])[0]
     except Exception:
         pass
 
@@ -853,7 +856,96 @@ async def extract_youtube_playlist(playlist_url: str) -> Optional[list]:
         print(f"[Scraper/playlist] Instant DB Cache Hit for playlist ID '{playlist_id}' ({len(cached)} tracks)!")
         return cached
 
-    # 2. Fast Invidious REST API Playlist Endpoint (0.3s)
+    # Determine scraping target URL (YouTube Mix lists starting with RD/UL need watch?v= parameter)
+    if playlist_id and (playlist_id.startswith("RD") or playlist_id.startswith("UL")):
+        vid = video_id or (playlist_id[2:13] if len(playlist_id) >= 13 else None)
+        if vid:
+            target_url = f"https://www.youtube.com/watch?v={vid}&list={playlist_id}"
+        else:
+            target_url = f"https://www.youtube.com/playlist?list={playlist_id}"
+    else:
+        target_url = f"https://www.youtube.com/playlist?list={playlist_id}" if playlist_id else playlist_url
+
+    # 2. Fast Direct HTML & ytInitialData Parsing (0.4s)
+    try:
+        connector = get_doh_connector()
+        html_headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
+            "Accept-Language": "en-US,en;q=0.9",
+        }
+        async with aiohttp.ClientSession(connector=connector, headers=html_headers) as session:
+            async with session.get(target_url, timeout=aiohttp.ClientTimeout(total=5)) as resp:
+                if resp.status == 200:
+                    html = await resp.text()
+                    m = (
+                        re.search(r'var\s+ytInitialData\s*=\s*(\{.*?\});</script>', html) or
+                        re.search(r'window\["ytInitialData"\]\s*=\s*(\{.*?\});</script>', html) or
+                        re.search(r'ytInitialData\s*=\s*(\{.*?\});', html)
+                    )
+                    if m:
+                        try:
+                            data = json.loads(m.group(1))
+                            res_html = []
+                            seen_vids = set()
+
+                            def walk(obj):
+                                if isinstance(obj, dict):
+                                    for key in ("playlistPanelVideoRenderer", "playlistVideoRenderer"):
+                                        if key in obj:
+                                            item = obj[key]
+                                            v_id = item.get("videoId")
+                                            title = None
+                                            t_obj = item.get("title", {})
+                                            if "simpleText" in t_obj:
+                                                title = t_obj["simpleText"]
+                                            elif "runs" in t_obj and t_obj["runs"]:
+                                                title = t_obj["runs"][0].get("text")
+
+                                            if v_id and v_id not in seen_vids:
+                                                seen_vids.add(v_id)
+                                                res_html.append({
+                                                    "title": title or "YouTube Song",
+                                                    "url": f"https://www.youtube.com/watch?v={v_id}",
+                                                    "id": v_id
+                                                })
+                                    for v in obj.values():
+                                        walk(v)
+                                elif isinstance(obj, list):
+                                    for item in obj:
+                                        walk(item)
+
+                            walk(data)
+                            if res_html:
+                                res_html = res_html[:50]
+                                print(f"[Scraper/playlist] Direct ytInitialData extracted {len(res_html)} tracks for playlist '{playlist_id}'!")
+                                save_playlist_to_cache(playlist_id, res_html)
+                                return res_html
+                        except Exception as json_err:
+                            print(f"[Scraper/playlist] JSON parse note: {json_err}")
+
+                    # Fallback Regex match for direct videoId in HTML
+                    v_ids = re.findall(r'"videoId":"([a-zA-Z0-9_-]{11})"', html)
+                    if v_ids:
+                        res_regex = []
+                        seen_set = set()
+                        for vid in v_ids:
+                            if vid not in seen_set:
+                                seen_set.add(vid)
+                                res_regex.append({
+                                    "title": "YouTube Track",
+                                    "url": f"https://www.youtube.com/watch?v={vid}",
+                                    "id": vid
+                                })
+                                if len(res_regex) >= 50:
+                                    break
+                        if res_regex:
+                            print(f"[Scraper/playlist] Direct Regex extracted {len(res_regex)} tracks for playlist '{playlist_id}'!")
+                            save_playlist_to_cache(playlist_id, res_regex)
+                            return res_regex
+    except Exception as e:
+        print(f"[Scraper/playlist] Direct HTML parse note: {e}")
+
+    # 3. Fast Invidious REST API Playlist Endpoint (0.5s)
     if playlist_id:
         inv_mirrors = ["https://invidious.projectsegfau.lt", "https://inv.nadeko.net", "https://yewtu.be"]
         inv_headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
@@ -882,49 +974,6 @@ async def extract_youtube_playlist(playlist_url: str) -> Optional[list]:
             except Exception as e:
                 print(f"[Scraper/playlist] Invidious mirror {mirror} note: {e}")
 
-    # 3. Direct YouTube Playlist Page HTML Scraping (0.8s)
-    if playlist_id:
-        try:
-            pl_page_url = f"https://www.youtube.com/playlist?list={playlist_id}"
-            connector = get_doh_connector()
-            html_headers = {
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
-                "Accept-Language": "en-US,en;q=0.9",
-            }
-            async with aiohttp.ClientSession(connector=connector, headers=html_headers) as session:
-                async with session.get(pl_page_url, timeout=aiohttp.ClientTimeout(total=4)) as resp:
-                    if resp.status == 200:
-                        html = await resp.text()
-                        matches = re.findall(r'"playlistVideoRenderer":\{"videoId":"([a-zA-Z0-9_-]{11})".*?"title":\{"runs":\[\{"text":"([^"]+)"', html)
-                        if not matches:
-                            v_ids = re.findall(r'"videoId":"([a-zA-Z0-9_-]{11})"', html)
-                            seen_set = set()
-                            matches = []
-                            for vid in v_ids:
-                                if vid not in seen_set:
-                                    seen_set.add(vid)
-                                    matches.append((vid, "YouTube Track"))
-
-                        if matches:
-                            res_html = []
-                            seen_vids = set()
-                            for vid, vtitle in matches:
-                                if vid not in seen_vids:
-                                    seen_vids.add(vid)
-                                    res_html.append({
-                                        "title": vtitle or "YouTube Song",
-                                        "url": f"https://www.youtube.com/watch?v={vid}",
-                                        "id": vid
-                                    })
-                                    if len(res_html) >= 50:
-                                        break
-                            if res_html:
-                                print(f"[Scraper/playlist] Direct HTML extracted {len(res_html)} tracks for playlist '{playlist_id}'!")
-                                save_playlist_to_cache(playlist_id, res_html)
-                                return res_html
-        except Exception as e:
-            print(f"[Scraper/playlist] Direct HTML parse note: {e}")
-
     # 4. Fast GAMEOVER FastAPI Backend /api/playlist check (1.5s max timeout)
     try:
         import os
@@ -949,26 +998,27 @@ async def extract_youtube_playlist(playlist_url: str) -> Optional[list]:
     except Exception as e:
         print(f"[Scraper/playlist] FastAPI playlist note: {e}")
 
-    # 5. yt-dlp fallback flat extraction
+    # 5. yt-dlp fallback flat extraction with 15.0s timeout & ignoreerrors
     def extract():
         ydl_opts = {
             'extract_flat': 'in_playlist',
             'quiet': True,
             'skip_download': True,
             'nocheckcertificate': True,
-            'socket_timeout': 5.0,
-            'retries': 2,
+            'socket_timeout': 15.0,
+            'retries': 3,
+            'ignoreerrors': True,
             'no_warnings': True,
             'extractor_args': {
                 'youtube': {
-                    'player_client': ['android_vr', 'web_creator', 'android']
+                    'player_client': ['web', 'android']
                 }
             }
         }
         if Config.USE_PROXY and Config.get_proxy_url():
             ydl_opts['proxy'] = Config.get_proxy_url()
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(playlist_url, download=False)
+            info = ydl.extract_info(target_url, download=False)
             if not info:
                 return None
             entries = info.get('entries', [])
@@ -976,14 +1026,14 @@ async def extract_youtube_playlist(playlist_url: str) -> Optional[list]:
             for entry in entries:
                 if not entry:
                     continue
-                video_id = entry.get('id')
-                if not video_id and entry.get('url'):
-                    video_id = extract_video_id(entry.get('url'))
-                if video_id:
+                v_id = entry.get('id')
+                if not v_id and entry.get('url'):
+                    v_id = extract_video_id(entry.get('url'))
+                if v_id:
                     result.append({
                         "title": entry.get("title") or "YouTube Song",
-                        "url": f"https://www.youtube.com/watch?v={video_id}",
-                        "id": video_id
+                        "url": f"https://www.youtube.com/watch?v={v_id}",
+                        "id": v_id
                     })
             return result
 
