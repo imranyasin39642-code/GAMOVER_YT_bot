@@ -259,6 +259,7 @@ async def resolve_stream_url(input_query: str, mode: str = "video") -> Optional[
     if target_url:
         print(f"[Scraper/Fallback] Playwright engine returned None. Running fast 0-cookie web scrapers for {target_url}...")
         fast_scrapers = [
+            _extract_ytdlp_direct,
             _extract_cobalt,
             _extract_yt5s,
             _extract_yt1s,

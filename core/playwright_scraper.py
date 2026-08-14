@@ -22,9 +22,6 @@ import aiohttp
 INVIDIOUS_MIRRORS = [
     "https://yewtu.be",
     "https://inv.nadeko.net",
-    "https://invidious.drgns.space",
-    "https://inv.tux.pizza",
-    "https://invidious.lunar.icu",
 ]
 
 _PLAYWRIGHT_INSTANCE = None
@@ -71,32 +68,30 @@ async def close_browser():
 
 async def extract_stream_playwright(video_id: str, mode: str = "audio") -> Optional[Dict[str, str]]:
     """
-    Tier 2 Multi-Engine Parallel Extractor.
-    Races Cobalt, Loader, Piped, Invidious, YT5s, YT1s, Y2Mate, and YTmp3 IN PARALLEL for sub-second responses.
+    Tier 2 Multi-Engine Extractor.
+    Races yt-dlp direct, Cobalt, Piped, Invidious, YT5s, YT1s, Y2Mate, and YTmp3 IN PARALLEL for sub-second responses.
     """
     clean_video_id = video_id.strip()
     yt_url = f"https://www.youtube.com/watch?v={clean_video_id}"
 
-    # Import all fast scrapers from core.scrapers for parallel execution
+    # Import fast scrapers from core.scrapers for parallel execution
     from core.scrapers import (
-        _extract_cobalt, _extract_piped, _extract_yt5s, _extract_invidious,
-        _extract_yt1s, _extract_y2mate, _extract_ytmp3
+        _extract_ytdlp_direct, _extract_cobalt, _extract_piped, _extract_yt5s,
+        _extract_invidious, _extract_yt1s, _extract_y2mate, _extract_ytmp3
     )
 
-    # Unified Parallel Engine Pool
+    # Unified Parallel Engine Pool (yt-dlp direct + fast APIs)
     parallel_tasks = [
+        asyncio.create_task(_extract_ytdlp_direct(yt_url, mode)),
         asyncio.create_task(_extract_cobalt(yt_url, mode)),
+        asyncio.create_task(_extract_invidious(yt_url, mode)),
+        asyncio.create_task(_extract_piped(yt_url, mode)),
         asyncio.create_task(_scrape_loader_engine(clean_video_id, yt_url, mode)),
         asyncio.create_task(_extract_yt5s(yt_url, mode)),
         asyncio.create_task(_extract_yt1s(yt_url, mode)),
         asyncio.create_task(_extract_y2mate(yt_url, mode)),
         asyncio.create_task(_extract_ytmp3(yt_url, mode)),
-        asyncio.create_task(_extract_piped(yt_url, mode)),
-        asyncio.create_task(_extract_invidious(yt_url, mode)),
     ]
-
-    for mirror in INVIDIOUS_MIRRORS:
-        parallel_tasks.append(asyncio.create_task(_scrape_invidious_api_fast(mirror, clean_video_id, mode)))
 
     for future in asyncio.as_completed(parallel_tasks):
         try:
@@ -137,8 +132,8 @@ async def _scrape_invidious_playwright_browser(video_id: str, mode: str) -> Opti
         for mirror in INVIDIOUS_MIRRORS:
             try:
                 target_url = f"{mirror}/watch?v={video_id}"
-                await page.goto(target_url, timeout=9000, wait_until="domcontentloaded")
-                await page.wait_for_timeout(500)
+                await page.goto(target_url, timeout=4000, wait_until="domcontentloaded")
+                await page.wait_for_timeout(300)
 
                 title = await page.title()
                 html = await page.content()
