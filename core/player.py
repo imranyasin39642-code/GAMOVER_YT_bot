@@ -30,11 +30,12 @@ async def download_file(url: str, dest_path: str, progress_callback=None, expect
     max_retries = 2
     timeout = aiohttp.ClientTimeout(total=None, connect=15, sock_read=60)
     headers = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36',
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/127.0.0.0 Safari/537.36',
         'Accept': '*/*',
         'Accept-Language': 'en-US,en;q=0.9',
-        'Referer': 'https://www.youtube.com/',
     }
+    if "youtube.com" in url or "googlevideo.com" in url:
+        headers['Referer'] = 'https://www.youtube.com/'
 
     for attempt in range(1, max_retries + 1):
         try:

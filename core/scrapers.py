@@ -394,17 +394,34 @@ async def _extract_gameover_api(video_url: str, mode: str) -> Optional[Dict[str,
     return None
 
 
+async def _verify_url_has_bytes(session: aiohttp.ClientSession, stream_url: str) -> bool:
+    """Helper to verify stream URL actually returns media bytes (>0 bytes & non-HTML) without downloading full file."""
+    if not stream_url or not stream_url.startswith("http"):
+        return False
+    try:
+        async with session.get(stream_url, timeout=aiohttp.ClientTimeout(total=4), allow_redirects=True) as resp:
+            if resp.status == 200:
+                ctype = resp.headers.get("Content-Type", "").lower()
+                if "text/html" in ctype:
+                    return False
+                chunk = await resp.content.read(512)
+                return len(chunk) > 0
+    except Exception:
+        pass
+    return False
+
+
 # ─── Scraper 2: Cobalt API (High-Performance Multi-Instance Resolution) ────
 async def _extract_cobalt(video_url: str, mode: str) -> Optional[Dict[str, str]]:
     """Resolves direct stream URL using public Cobalt API instances."""
     instances = [
+        "https://api.cobalt.liubquanti.click",
         "https://rue-cobalt.xenon.zone",
         "https://cobalt.q19.org",
         "https://api.cobalt.tools",
         "https://cobalt.api.sc7.io",
         "https://subito-c.meowing.de",
         "https://nuko-c.meowing.de",
-        "https://api.cobalt.liubquanti.click",
     ]
     payload = {
         "url": video_url,
@@ -427,13 +444,15 @@ async def _extract_cobalt(video_url: str, mode: str) -> Optional[Dict[str, str]]
                         if resp.status == 200:
                             data = await resp.json()
                             if data.get("status") != "error" and data.get("url"):
-                                video_id = extract_video_id(video_url) or ""
-                                return {
-                                    "url": data["url"],
-                                    "title": data.get("filename") or f"YouTube Video ({video_id})",
-                                    "thumbnail": f"https://img.youtube.com/vi/{video_id}/hqdefault.jpg" if video_id else "",
-                                    "duration": 0
-                                }
+                                cand_url = data["url"]
+                                if await _verify_url_has_bytes(session, cand_url):
+                                    video_id = extract_video_id(video_url) or ""
+                                    return {
+                                        "url": cand_url,
+                                        "title": data.get("filename") or f"YouTube Video ({video_id})",
+                                        "thumbnail": f"https://img.youtube.com/vi/{video_id}/hqdefault.jpg" if video_id else "",
+                                        "duration": 0
+                                    }
                 except Exception:
                     pass
                 return None
@@ -490,12 +509,16 @@ async def _extract_invidious(video_url: str, mode: str) -> Optional[Dict[str, st
                                     audio_streams = [f for f in adaptive if str(f.get("type", "")).startswith("audio/")]
                                     if audio_streams:
                                         audio_streams.sort(key=lambda x: int(x.get("bitrate", 0) or 0), reverse=True)
-                                        return {"url": audio_streams[0]["url"], "title": title, "duration": dur, "thumbnail": thumb}
+                                        cand = audio_streams[0]["url"]
+                                        if await _verify_url_has_bytes(session, cand):
+                                            return {"url": cand, "title": title, "duration": dur, "thumbnail": thumb}
                                 else:
                                     format_streams = data.get("formatStreams", [])
                                     if format_streams:
                                         format_streams.sort(key=lambda x: int(x.get("height", 0) or 0), reverse=True)
-                                        return {"url": format_streams[0]["url"], "title": title, "duration": dur, "thumbnail": thumb}
+                                        cand = format_streams[0]["url"]
+                                        if await _verify_url_has_bytes(session, cand):
+                                            return {"url": cand, "title": title, "duration": dur, "thumbnail": thumb}
                 except Exception:
                     pass
                 return None
