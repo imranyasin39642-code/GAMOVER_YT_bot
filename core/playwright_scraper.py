@@ -70,108 +70,67 @@ async def close_browser():
 
 async def extract_stream_playwright(video_id: str, mode: str = "audio") -> Optional[Dict[str, str]]:
     """
-    Tier 2 Media Extractor.
-    Takes video_id, visits Invidious REST API & browser engines for high-speed range-supporting stream URLs,
-    extracts high-quality stream URL (.m4a for audio, 1080p60/1080p .mp4 for video).
-    Auto-rotates on failure.
+    Tier 2 Parallel Multitasking Media Extractor.
+    Executes REST API mirrors & Playwright browser contexts IN PARALLEL for sub-second responses.
+    Allows multiple concurrent users in same/different groups without delay.
     """
     clean_video_id = video_id.strip()
     yt_url = f"https://www.youtube.com/watch?v={clean_video_id}"
 
-    # Engine 1: Fast Invidious Mirrors REST API (Supports HTTP 206 Range = 25-35 MB/s Multi-Stream Download!)
-    for mirror in INVIDIOUS_MIRRORS:
+    # Engine 1: Instant Parallel Invidious REST API Mirrors (0.2s - 0.5s resolution)
+    api_tasks = [
+        asyncio.create_task(_scrape_invidious_api_fast(mirror, clean_video_id, mode))
+        for mirror in INVIDIOUS_MIRRORS
+    ]
+    for future in asyncio.as_completed(api_tasks):
         try:
-            res = await _scrape_invidious_api_fast(mirror, clean_video_id, mode)
+            res = await future
             if res and res.get("url"):
-                print(f"[Tier2/Invidious-API] SUCCESS via {mirror}: {res.get('title', 'Video')[:35]}")
+                for t in api_tasks:
+                    if not t.done():
+                        t.cancel()
+                print(f"[Tier2/Invidious-API] INSTANT PARALLEL SUCCESS: {res.get('title', 'Video')[:35]}")
                 return res
-        except Exception as e:
-            print(f"[Tier2/Invidious-API] Mirror {mirror} note: {e}")
+        except Exception:
+            pass
 
-    # Engine 2: Playwright Headless Scraper on Invidious (Supports HTTP 206 Range)
-    try:
-        res = await _scrape_invidious_playwright_browser(clean_video_id, mode)
-        if res and res.get("url"):
-            print(f"[Tier2/Playwright-Invidious] SUCCESS: {res.get('title', 'Video')[:35]}")
-            return res
-    except Exception as e:
-        print(f"[Tier2/Playwright-Invidious] Note: {e}")
-
-    # Engine 3: Loader Web Scraper (Fallback for 1080p video and MP3 audio)
-    try:
-        res = await _scrape_loader_engine(clean_video_id, yt_url, mode)
-        if res and res.get("url"):
-            print(f"[Tier2/Loader] SUCCESS: {res.get('title', 'Video')[:35]} | Mode: {mode}")
-            return res
-    except Exception as e:
-        print(f"[Tier2/Loader] Note: {e}")
+    # Engine 2: Fallback Parallel Multitasking (Playwright Browser Context + Loader Scraper simultaneously)
+    fallback_tasks = [
+        asyncio.create_task(_scrape_invidious_playwright_browser(clean_video_id, mode)),
+        asyncio.create_task(_scrape_loader_engine(clean_video_id, yt_url, mode))
+    ]
+    for future in asyncio.as_completed(fallback_tasks):
+        try:
+            res = await future
+            if res and res.get("url"):
+                for t in fallback_tasks:
+                    if not t.done():
+                        t.cancel()
+                print(f"[Tier2/Multitask-Parallel] SUCCESS: {res.get('title', 'Video')[:35]}")
+                return res
+        except Exception:
+            pass
 
     print(f"[Tier2] All extraction engines failed for video_id={clean_video_id}")
     return None
 
 
-
-async def _scrape_loader_engine(video_id: str, youtube_url: str, mode: str) -> Optional[Dict[str, str]]:
-    """Loader.to Web Scraper for 1080p video and MP3 audio."""
-    clean_url = f"https://www.youtube.com/watch?v={video_id}"
-    fmt = "1080" if mode == "video" else "mp3"
-    init_url = f"https://loader.to/ajax/download.php?format={fmt}&url={urllib.parse.quote(clean_url)}"
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
-        "Referer": "https://en.loader.to/"
-    }
-
-    async with aiohttp.ClientSession(headers=headers) as session:
-        try:
-            async with session.get(init_url, timeout=aiohttp.ClientTimeout(total=12)) as resp:
-                if resp.status != 200:
-                    return None
-                data = await resp.json(content_type=None)
-                if not data.get("success"):
-                    return None
-
-                progress_url = data.get("progress_url")
-                title = data.get("title") or (data.get("info") or {}).get("title") or "YouTube Video"
-                thumbnail = (data.get("info") or {}).get("image") or f"https://i.ytimg.com/vi/{video_id}/hqdefault.jpg"
-
-                if not progress_url:
-                    return None
-
-            # Poll progress URL for up to 18 seconds (takes 6-10s for server to convert 1080p/mp3)
-            for _ in range(15):
-                await asyncio.sleep(1.2)
-                try:
-                    async with session.get(progress_url, timeout=aiohttp.ClientTimeout(total=8)) as resp2:
-                        if resp2.status == 200:
-                            pdata = await resp2.json(content_type=None)
-                            dl_url = pdata.get("download_url")
-                            if dl_url and dl_url.startswith("http") and not dl_url.endswith(".html"):
-                                return {
-                                    "url": dl_url,
-                                    "title": pdata.get("title") or title,
-                                    "duration": int(pdata.get("video_duration") or 0),
-                                    "thumbnail": thumbnail,
-                                }
-                except Exception as e:
-                    print(f"[Tier2/Loader] Poll note: {e}")
-        except Exception as e:
-            print(f"[Tier2/Loader] Error: {e}")
-
-    return None
-
-
 async def _scrape_invidious_playwright_browser(video_id: str, mode: str) -> Optional[Dict[str, str]]:
-    """Playwright Chromium headless browser scraper specifically for Invidious instance."""
+    """Playwright Chromium headless browser scraper using isolated browser contexts for true multitasking."""
     browser = await get_browser()
     if not browser:
         return None
 
+    context = None
     page = None
     try:
-        page = await browser.new_page()
+        context = await browser.new_context(
+            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36"
+        )
+        page = await context.new_page()
         target_url = f"https://invidious.nerdvpn.de/watch?v={video_id}"
-        await page.goto(target_url, timeout=15000, wait_until="domcontentloaded")
-        await page.wait_for_timeout(2000)
+        await page.goto(target_url, timeout=12000, wait_until="domcontentloaded")
+        await page.wait_for_timeout(1000)
 
         title = await page.title()
         html = await page.content()
@@ -211,6 +170,11 @@ async def _scrape_invidious_playwright_browser(video_id: str, mode: str) -> Opti
         if page:
             try:
                 await page.close()
+            except Exception:
+                pass
+        if context:
+            try:
+                await context.close()
             except Exception:
                 pass
 

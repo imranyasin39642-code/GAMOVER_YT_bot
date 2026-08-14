@@ -1,6 +1,31 @@
 import os
 import sys
 import asyncio
+import sqlite3
+
+# Increase Linux open file descriptors limit (prevents [Errno 24] Too many open files)
+try:
+    import resource
+    soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
+    target = max(65536, min(hard, 1048576))
+    resource.setrlimit(resource.RLIMIT_NOFILE, (target, hard))
+    print(f"[System] Max open file descriptors increased to: {target}")
+except Exception:
+    pass
+
+# Global SQLite patch to prevent "database is locked" & "unable to open database file" errors
+_orig_sqlite_connect = sqlite3.connect
+def _patched_sqlite_connect(*args, **kwargs):
+    kwargs.setdefault("timeout", 30.0)
+    conn = _orig_sqlite_connect(*args, **kwargs)
+    try:
+        conn.execute("PRAGMA journal_mode=WAL;")
+        conn.execute("PRAGMA busy_timeout=30000;")
+    except Exception:
+        pass
+    return conn
+sqlite3.connect = _patched_sqlite_connect
+
 from pyrogram import Client, idle, enums
 from pyrogram.types import BotCommand, InlineKeyboardMarkup
 from config import Config
