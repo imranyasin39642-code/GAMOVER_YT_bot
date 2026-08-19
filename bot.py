@@ -182,8 +182,27 @@ assistant = Client(
     proxy=Config.get_proxy_config()
 )
 
+async def start_health_server():
+    """Lightweight HTTP server on port 7860 for Hugging Face Spaces health checks."""
+    try:
+        from aiohttp import web
+        async def handle_health(request):
+            return web.Response(text="GAMEOVER YT Music Bot is Active & Running 🟢")
+        app = web.Application()
+        app.router.add_get("/", handle_health)
+        app.router.add_get("/health", handle_health)
+        runner = web.AppRunner(app)
+        await runner.setup()
+        port = int(os.getenv("PORT", "7860"))
+        site = web.TCPSite(runner, "0.0.0.0", port)
+        await site.start()
+        print(f"[Web] Hugging Face Health server listening on 0.0.0.0:{port}")
+    except Exception as e:
+        print(f"[Web] Health server note: {e}")
+
 async def main():
     print("[Bot] Starting clients...")
+    await start_health_server()
     await bot.start()
     await assistant.start()
     

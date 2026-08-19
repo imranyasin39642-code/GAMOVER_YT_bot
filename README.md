@@ -1,40 +1,31 @@
+---
+title: GAMEOVER YT Music Bot
+emoji: 🎬
+colorFrom: red
+colorTo: black
+sdk: docker
+app_port: 7860
+---
+
 # 👑 GameOver YT Streamer
 
 A premium, high-performance Telegram group video and audio streamer bot using PyTgCalls.
 
 ## Features
-- 🎬 High-speed video streaming (720p 60fps locked)
+- 🎬 High-speed video streaming (720p 60fps locked / 1080p 60fps)
 - 🎵 High-fidelity audio streaming
-- 🔍 Automatic YouTube Search fallback (no API key needed)
+- 🔍 Automatic YouTube Search fallback (0-cookie 2-tier engine)
 - 📊 Interactive Now Playing cards with live progress bars and controls
 - 👑 Sudo & Admin authorization rules
 
-## VPS Setup Instructions
-1. Clone the repository on your VPS:
-   ```bash
-   git clone https://github.com/imranyasin39642-code/GAMOVER_YT_bot.git
-   cd GAMOVER_YT_bot
-   ```
-2. Install system dependencies (FFmpeg):
-   ```bash
-   sudo apt update && sudo apt install ffmpeg -y
-   ```
-3. Install Python dependencies:
-   ```bash
-   pip install -r requirements.txt
-   ```
-4. Create your `.env` file (see Configuration section below).
-5. Start the bot:
-   ```bash
-   python bot.py
-   ```
-
-## Configuration (.env)
-Create a `.env` file in the root directory:
-```env
-API_ID=your_api_id
-API_HASH=your_api_hash
-BOT_TOKEN=your_bot_token
-STRING_SESSION=your_pyrogram_assistant_session_string
-OWNER_ID=your_telegram_user_id
-```
+## Hugging Face Spaces Setup Instructions
+1. Create a new Space on [Hugging Face](https://huggingface.co/new-space).
+2. Select **Docker** as the Space SDK.
+3. Push or sync this repository to your Hugging Face Space.
+4. Add your Environment Variables in Space **Settings -> Repository secrets**:
+   - `API_ID`
+   - `API_HASH`
+   - `BOT_TOKEN`
+   - `STRING_SESSION`
+   - `OWNER_ID`
+5. Click **Save** — the bot will build and start automatically!
